@@ -196,492 +196,518 @@ impl eframe::App for PigmentApp {
         egui::SidePanel::left("tools")
             .exact_width(48.0)
             .show_inside(root, |ui| {
-                ui.add_space(6.0);
-                use crate::icons;
-                for (tool, icon, name) in [
-                    (Tool::Move, icons::PAN, "Pan view"),
-                    (Tool::MoveLayer, icons::MOVE, "Move layer"),
-                    (Tool::Brush, icons::BRUSH, "Brush"),
-                    (Tool::Eraser, icons::ERASER, "Eraser"),
-                    (
-                        Tool::Clone,
-                        icons::CLONE,
-                        "Clone stamp (Alt-click sets source)",
-                    ),
-                    (
-                        Tool::Heal,
-                        icons::HEAL,
-                        "Healing brush (Alt-click source; heals on release)",
-                    ),
-                    (
-                        Tool::SpotHeal,
-                        icons::SPOT_HEAL,
-                        "Spot heal (auto-source; heals on release)",
-                    ),
-                    (
-                        Tool::ContentFill,
-                        icons::CONTENT_FILL,
-                        "Content-aware fill (brush region; PatchMatch on release)",
-                    ),
-                    (
-                        Tool::Dodge,
-                        icons::DODGE,
-                        "Dodge / burn — lighten, or darken with Alt (applies on release)",
-                    ),
-                    (
-                        Tool::Liquify,
-                        icons::LIQUIFY,
-                        "Liquify — push/twirl/pucker/bloat mesh warp",
-                    ),
-                    (
-                        Tool::Detail,
-                        icons::DETAIL,
-                        "Detail brush — saturate / desaturate / blur / sharpen",
-                    ),
-                    (Tool::Fill, icons::FILL, "Bucket fill"),
-                    (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
-                    (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
-                    (Tool::SelectEllipse, icons::ELLIPSE_SELECT, "Ellipse select"),
-                    (Tool::Lasso, icons::LASSO, "Lasso select"),
-                    (Tool::MagicWand, icons::MAGIC_WAND, "Magic wand"),
-                    (Tool::Transform, icons::TRANSFORM, "Transform"),
-                    (Tool::Crop, icons::CROP, "Crop"),
-                    (Tool::Text, icons::TEXT, "Text"),
-                    (Tool::ShapeRect, icons::SHAPE, "Rectangle shape"),
-                    (Tool::ShapeEllipse, icons::ELLIPSE_SELECT, "Ellipse shape"),
-                    (Tool::Gradient, icons::GRADIENT, "Gradient"),
-                ] {
-                    let btn = egui::SelectableLabel::new(
-                        self.tool == tool,
-                        egui::RichText::new(icon).size(20.0),
-                    );
-                    if ui
-                        .add_sized([36.0, 30.0], btn)
-                        .on_hover_text(name)
-                        .clicked()
-                    {
-                        self.tool = tool;
-                    }
-                }
-                ui.add_space(6.0);
-                ui.separator();
-                ui.vertical_centered(|ui| ui.color_edit_button_srgba(&mut self.brush_color));
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add_space(6.0);
+                        use crate::icons;
+                        for (tool, icon, name) in [
+                            (Tool::Move, icons::PAN, "Pan view"),
+                            (Tool::MoveLayer, icons::MOVE, "Move layer"),
+                            (Tool::Brush, icons::BRUSH, "Brush"),
+                            (Tool::Eraser, icons::ERASER, "Eraser"),
+                            (
+                                Tool::Clone,
+                                icons::CLONE,
+                                "Clone stamp (Alt-click sets source)",
+                            ),
+                            (
+                                Tool::Heal,
+                                icons::HEAL,
+                                "Healing brush (Alt-click source; heals on release)",
+                            ),
+                            (
+                                Tool::SpotHeal,
+                                icons::SPOT_HEAL,
+                                "Spot heal (auto-source; heals on release)",
+                            ),
+                            (
+                                Tool::ContentFill,
+                                icons::CONTENT_FILL,
+                                "Content-aware fill (brush region; PatchMatch on release)",
+                            ),
+                            (
+                                Tool::Dodge,
+                                icons::DODGE,
+                                "Dodge / burn — lighten, or darken with Alt (applies on release)",
+                            ),
+                            (
+                                Tool::Liquify,
+                                icons::LIQUIFY,
+                                "Liquify — push/twirl/pucker/bloat mesh warp",
+                            ),
+                            (
+                                Tool::Detail,
+                                icons::DETAIL,
+                                "Detail brush — saturate / desaturate / blur / sharpen",
+                            ),
+                            (Tool::Fill, icons::FILL, "Bucket fill"),
+                            (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
+                            (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
+                            (Tool::SelectEllipse, icons::ELLIPSE_SELECT, "Ellipse select"),
+                            (Tool::Lasso, icons::LASSO, "Lasso select"),
+                            (Tool::MagicWand, icons::MAGIC_WAND, "Magic wand"),
+                            (Tool::Transform, icons::TRANSFORM, "Transform"),
+                            (Tool::Crop, icons::CROP, "Crop"),
+                            (Tool::Text, icons::TEXT, "Text"),
+                            (Tool::ShapeRect, icons::SHAPE, "Rectangle shape"),
+                            (Tool::ShapeEllipse, icons::ELLIPSE_SELECT, "Ellipse shape"),
+                            (Tool::Gradient, icons::GRADIENT, "Gradient"),
+                        ] {
+                            let btn = egui::SelectableLabel::new(
+                                self.tool == tool,
+                                egui::RichText::new(icon).size(20.0),
+                            );
+                            if ui
+                                .add_sized([36.0, 30.0], btn)
+                                .on_hover_text(name)
+                                .clicked()
+                            {
+                                self.tool = tool;
+                            }
+                        }
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.vertical_centered(|ui| {
+                            ui.color_edit_button_srgba(&mut self.brush_color)
+                        });
+                    });
             });
 
         egui::SidePanel::right("panels")
             .default_width(250.0)
             .show_inside(root, |ui| {
-                ui.heading("Brush");
-                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=400.0).text("size"));
-                ui.add(egui::Slider::new(&mut self.brush_hardness, 0.0..=0.99).text("hardness"));
-                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0).text("opacity"));
-                if self.tool == Tool::Liquify {
-                    ui.horizontal(|ui| {
-                        ui.label("Liquify:");
-                        for (m, name) in [(0u8, "Push"), (1, "Twirl"), (2, "Pucker"), (3, "Bloat")]
-                        {
-                            if ui.selectable_label(self.liquify_mode == m, name).clicked() {
-                                self.liquify_mode = m;
-                            }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.heading("Brush");
+                        ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=400.0).text("size"));
+                        ui.add(
+                            egui::Slider::new(&mut self.brush_hardness, 0.0..=0.99)
+                                .text("hardness"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0).text("opacity"),
+                        );
+                        if self.tool == Tool::Liquify {
+                            ui.horizontal(|ui| {
+                                ui.label("Liquify:");
+                                for (m, name) in
+                                    [(0u8, "Push"), (1, "Twirl"), (2, "Pucker"), (3, "Bloat")]
+                                {
+                                    if ui.selectable_label(self.liquify_mode == m, name).clicked() {
+                                        self.liquify_mode = m;
+                                    }
+                                }
+                            });
                         }
-                    });
-                }
-                if self.tool == Tool::Detail {
-                    ui.horizontal(|ui| {
-                        ui.label("Detail:");
-                        for (m, name) in [
-                            (0u8, "Saturate"),
-                            (1, "Desaturate"),
-                            (2, "Blur"),
-                            (3, "Sharpen"),
-                        ] {
-                            if ui.selectable_label(self.detail_mode == m, name).clicked() {
-                                self.detail_mode = m;
-                            }
+                        if self.tool == Tool::Detail {
+                            ui.horizontal(|ui| {
+                                ui.label("Detail:");
+                                for (m, name) in [
+                                    (0u8, "Saturate"),
+                                    (1, "Desaturate"),
+                                    (2, "Blur"),
+                                    (3, "Sharpen"),
+                                ] {
+                                    if ui.selectable_label(self.detail_mode == m, name).clicked() {
+                                        self.detail_mode = m;
+                                    }
+                                }
+                            });
                         }
-                    });
-                }
-                ui.checkbox(&mut self.speed_dynamics, "speed → size")
+                        ui.checkbox(&mut self.speed_dynamics, "speed → size")
                     .on_hover_text(
                         "Faster strokes paint thinner (stylus pressure isn't exposed by eframe)",
                     );
-                if self.speed_dynamics {
-                    ui.add(
-                        egui::Slider::new(&mut self.min_size_scale, 0.05..=1.0).text("min size"),
-                    );
-                }
-                if self.tool == Tool::Fill {
-                    ui.add(
-                        egui::Slider::new(&mut self.fill_tolerance, 0.0..=1.0).text("tolerance"),
-                    );
-                    ui.checkbox(&mut self.fill_contiguous, "contiguous");
-                }
-                if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
-                    ui.checkbox(&mut self.sample_all, "sample all layers");
-                }
-                if matches!(self.tool, Tool::MoveLayer | Tool::Transform) {
-                    ui.label("Drag to move the active layer.");
-                    if self.tool == Tool::Transform {
-                        ui.label("Shift+drag to scale.");
-                    }
-                }
-                if matches!(
-                    self.tool,
-                    Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand
-                ) {
-                    ui.label("Shift: add · Alt: subtract.");
-                }
+                        if self.speed_dynamics {
+                            ui.add(
+                                egui::Slider::new(&mut self.min_size_scale, 0.05..=1.0)
+                                    .text("min size"),
+                            );
+                        }
+                        if self.tool == Tool::Fill {
+                            ui.add(
+                                egui::Slider::new(&mut self.fill_tolerance, 0.0..=1.0)
+                                    .text("tolerance"),
+                            );
+                            ui.checkbox(&mut self.fill_contiguous, "contiguous");
+                        }
+                        if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
+                            ui.checkbox(&mut self.sample_all, "sample all layers");
+                        }
+                        if matches!(self.tool, Tool::MoveLayer | Tool::Transform) {
+                            ui.label("Drag to move the active layer.");
+                            if self.tool == Tool::Transform {
+                                ui.label("Shift+drag to scale.");
+                            }
+                        }
+                        if matches!(
+                            self.tool,
+                            Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand
+                        ) {
+                            ui.label("Shift: add · Alt: subtract.");
+                        }
 
-                ui.separator();
-                {
-                    let id = self.active_id();
-                    let mut clip = self.clipped_layers.contains(&id);
-                    if ui
-                        .checkbox(&mut clip, "Clip to layer below")
-                        .on_hover_text("Clipping mask: show only over the layer beneath's pixels")
-                        .changed()
-                    {
-                        if clip {
-                            self.clipped_layers.insert(id);
-                        } else {
-                            self.clipped_layers.remove(&id);
-                        }
-                        self.force_composite = true;
-                    }
-                }
-
-                ui.separator();
-                egui::CollapsingHeader::new("Blend-If").show(ui, |ui| {
-                    let id = self.active_id();
-                    let mut enabled = self.blend_if.contains_key(&id);
-                    if ui.checkbox(&mut enabled, "enable (active layer)").changed() {
-                        if enabled {
-                            self.blend_if.insert(id, [0.0, 1.0, 0.0, 1.0]);
-                        } else {
-                            self.blend_if.remove(&id);
-                        }
-                    }
-                    if let Some(bi) = self.blend_if.get_mut(&id) {
-                        ui.label("This layer");
-                        ui.add(egui::Slider::new(&mut bi[0], 0.0..=1.0).text("black"));
-                        ui.add(egui::Slider::new(&mut bi[1], 0.0..=1.0).text("white"));
-                        ui.label("Underlying");
-                        ui.add(egui::Slider::new(&mut bi[2], 0.0..=1.0).text("black"));
-                        ui.add(egui::Slider::new(&mut bi[3], 0.0..=1.0).text("white"));
-                    }
-                });
-
-                ui.separator();
-                egui::CollapsingHeader::new("Layer style: Stroke").show(ui, |ui| {
-                    let id = self.active_id();
-                    let mut on = self.layer_strokes.contains_key(&id);
-                    if ui.checkbox(&mut on, "enable (active layer)").changed() {
-                        if on {
-                            self.layer_strokes.insert(id, ([0.0, 0.0, 0.0, 1.0], 4.0));
-                        } else {
-                            self.layer_strokes.remove(&id);
-                        }
-                        self.force_composite = true;
-                    }
-                    if let Some((color, width)) = self.layer_strokes.get_mut(&id) {
-                        let mut rgb = [color[0], color[1], color[2]];
-                        if ui.color_edit_button_rgb(&mut rgb).changed() {
-                            *color = [rgb[0], rgb[1], rgb[2], color[3]];
-                            self.force_composite = true;
-                        }
-                        if ui
-                            .add(egui::Slider::new(width, 1.0..=40.0).text("width px"))
-                            .changed()
+                        ui.separator();
                         {
-                            self.force_composite = true;
-                        }
-                    }
-                });
-
-                ui.separator();
-                egui::CollapsingHeader::new("Channels").show(ui, |ui| {
-                    let names =
-                        with_gpu(frame, |gpu, _, _| gpu.channel_names()).unwrap_or_default();
-                    if ui
-                        .add_enabled(
-                            self.selection_active,
-                            egui::Button::new("Save selection as channel"),
-                        )
-                        .clicked()
-                    {
-                        let name = format!("Alpha {}", names.len() + 1);
-                        with_gpu(frame, |gpu, d, q| gpu.save_selection_as_channel(d, q, name));
-                    }
-                    for name in names {
-                        ui.horizontal(|ui| {
-                            ui.label(&name);
-                            if ui.small_button("Load").clicked() {
-                                let n = name.clone();
-                                with_gpu(frame, |gpu, d, q| gpu.load_channel(d, q, &n));
-                                self.selection_active = true;
+                            let id = self.active_id();
+                            let mut clip = self.clipped_layers.contains(&id);
+                            if ui
+                                .checkbox(&mut clip, "Clip to layer below")
+                                .on_hover_text(
+                                    "Clipping mask: show only over the layer beneath's pixels",
+                                )
+                                .changed()
+                            {
+                                if clip {
+                                    self.clipped_layers.insert(id);
+                                } else {
+                                    self.clipped_layers.remove(&id);
+                                }
                                 self.force_composite = true;
                             }
-                            if ui.small_button("✕").clicked() {
-                                let n = name.clone();
-                                with_gpu(frame, |gpu, _, _| gpu.delete_channel(&n));
-                            }
-                        });
-                    }
-                });
+                        }
 
-                ui.separator();
-                egui::CollapsingHeader::new("Histogram").show(ui, |ui| {
-                    if ui.button("Refresh").clicked() {
-                        self.refresh_histogram(frame);
-                    }
-                    if let Some(h) = &self.hist {
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(ui.available_width(), 64.0),
-                            egui::Sense::hover(),
-                        );
-                        let painter = ui.painter_at(rect);
-                        painter.rect_filled(rect, 2.0, egui::Color32::from_gray(18));
-                        let max = h.luma.iter().copied().max().unwrap_or(1).max(1) as f32;
-                        let n = h.luma.len().max(1);
-                        for (i, &c) in h.luma.iter().enumerate() {
-                            let x = rect.left() + rect.width() * i as f32 / n as f32;
-                            let bh = rect.height() * (c as f32 / max);
-                            painter.line_segment(
-                                [
-                                    egui::pos2(x, rect.bottom()),
-                                    egui::pos2(x, rect.bottom() - bh),
-                                ],
-                                egui::Stroke::new(1.0, egui::Color32::from_gray(200)),
-                            );
-                        }
-                    }
-                });
-
-                ui.separator();
-                let (undos, redos) =
-                    with_gpu(frame, |gpu, _, _| gpu.history_labels()).unwrap_or_default();
-                egui::CollapsingHeader::new(format!(
-                    "History  ({} / {})",
-                    undos.len(),
-                    redos.len()
-                ))
-                .show(ui, |ui| {
-                    // Future states (redoable), furthest first.
-                    for (i, l) in redos.iter().enumerate().rev() {
-                        if ui.small_button(format!("redo  {l}")).clicked() {
-                            self.redo_count += (i + 1) as u32;
-                        }
-                    }
-                    ui.label("—— now ——");
-                    // Past states (undoable), newest first.
-                    for (i, l) in undos.iter().rev().enumerate() {
-                        if ui.small_button(format!("undo  {l}")).clicked() {
-                            self.undo_count += (i + 1) as u32;
-                        }
-                    }
-                });
-
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.heading("Layers");
-                    if ui
-                        .button(egui::RichText::new(crate::icons::PLUS_LAYER).size(18.0))
-                        .on_hover_text("New layer")
-                        .clicked()
-                    {
-                        let id = self
-                            .doc
-                            .layers
-                            .add_raster(format!("Layer {}", self.doc.layers.layers.len()));
-                        self.doc.active_layer = Some(id);
-                    }
-                    ui.menu_button("Adj", |ui| {
-                        for adj in Adjustment::defaults() {
-                            if ui.button(adj.name()).clicked() {
-                                let id = self.doc.layers.add_adjustment(adj);
-                                self.doc.active_layer = Some(id);
-                                ui.close_menu();
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text("New adjustment layer");
-                    ui.menu_button("Mask", |ui| {
-                        let has = self.masked_layers.contains(&self.active_id());
-                        if ui.button("Add white mask").clicked() {
-                            self.add_mask(frame, false);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(
-                                self.selection_active,
-                                egui::Button::new("Add from selection"),
-                            )
-                            .clicked()
-                        {
-                            self.add_mask(frame, true);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(has, egui::Button::new("Delete mask"))
-                            .clicked()
-                        {
-                            self.delete_mask(frame);
-                            ui.close_menu();
-                        }
-                        ui.add_enabled(
-                            has,
-                            egui::Checkbox::new(
-                                &mut self.edit_mask,
-                                "Edit mask (brush=reveal, eraser=hide)",
-                            ),
-                        );
-                    });
-                });
-                ui.separator();
-
-                let active = self.active_id();
-                let mut action = LayerAction::None;
-                let ids: Vec<LayerId> = self.doc.layers.layers.iter().rev().map(|l| l.id).collect();
-                for id in ids {
-                    let layer = self.doc.layers.get_mut(id).unwrap();
-                    let is_active = id == active;
-                    egui::Frame::NONE
-                        .fill(if is_active {
-                            egui::Color32::from_rgb(50, 70, 100)
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        })
-                        .inner_margin(4.0)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let eye = if layer.visible {
-                                    crate::icons::EYE
+                        ui.separator();
+                        egui::CollapsingHeader::new("Blend-If").show(ui, |ui| {
+                            let id = self.active_id();
+                            let mut enabled = self.blend_if.contains_key(&id);
+                            if ui.checkbox(&mut enabled, "enable (active layer)").changed() {
+                                if enabled {
+                                    self.blend_if.insert(id, [0.0, 1.0, 0.0, 1.0]);
                                 } else {
-                                    " "
-                                };
-                                if ui
-                                    .selectable_label(
-                                        layer.visible,
-                                        egui::RichText::new(eye).size(15.0),
-                                    )
-                                    .on_hover_text("Toggle visibility")
-                                    .clicked()
-                                {
-                                    layer.visible = !layer.visible;
+                                    self.blend_if.remove(&id);
                                 }
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut layer.name).desired_width(90.0),
-                                );
-                                if ui
-                                    .small_button(crate::icons::ARROW_UP)
-                                    .on_hover_text("Move up")
-                                    .clicked()
-                                {
-                                    action = LayerAction::MoveUp(id);
-                                }
-                                if ui
-                                    .small_button(crate::icons::ARROW_DOWN)
-                                    .on_hover_text("Move down")
-                                    .clicked()
-                                {
-                                    action = LayerAction::MoveDown(id);
-                                }
-                                if ui
-                                    .small_button(crate::icons::TRASH)
-                                    .on_hover_text("Delete layer")
-                                    .clicked()
-                                {
-                                    action = LayerAction::Delete(id);
-                                }
-                            });
-                            let is_adjustment = matches!(layer.kind, LayerKind::Adjustment(_));
-                            ui.horizontal(|ui| {
-                                if ui.selectable_label(is_active, "active").clicked() {
-                                    self.doc.active_layer = Some(id);
-                                }
-                                if !is_adjustment {
-                                    egui::ComboBox::from_id_salt(("blend", id.0))
-                                        .selected_text(format!("{:?}", layer.blend))
-                                        .width(120.0)
-                                        .show_ui(ui, |ui| {
-                                            for mode in BlendMode::ALL {
-                                                ui.selectable_value(
-                                                    &mut layer.blend,
-                                                    mode,
-                                                    format!("{mode:?}"),
-                                                );
-                                            }
-                                        });
-                                }
-                            });
-                            ui.add(
-                                egui::Slider::new(&mut layer.opacity, 0.0..=1.0)
-                                    .show_value(false)
-                                    .text("opacity"),
-                            );
-                            match &mut layer.kind {
-                                LayerKind::Adjustment(adj) => adjustment_ui(ui, adj),
-                                LayerKind::Text(t) => {
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut t.text)
-                                            .desired_width(150.0),
-                                    );
-                                    ui.add(
-                                        egui::Slider::new(&mut t.font_px, 6.0..=300.0).text("size"),
-                                    );
-                                    let mut col = srgba_to_color(t.color);
-                                    if ui.color_edit_button_srgba(&mut col).changed() {
-                                        t.color = color_to_srgba(col);
-                                    }
-                                    ui.horizontal(|ui| {
-                                        ui.selectable_value(&mut t.align, 0, "L");
-                                        ui.selectable_value(&mut t.align, 1, "C");
-                                        ui.selectable_value(&mut t.align, 2, "R");
-                                    });
-                                }
-                                LayerKind::Vector(v) => {
-                                    let mut col = srgba_to_color(v.color);
-                                    if ui.color_edit_button_srgba(&mut col).changed() {
-                                        v.color = color_to_srgba(col);
-                                    }
-                                }
-                                _ => {}
+                            }
+                            if let Some(bi) = self.blend_if.get_mut(&id) {
+                                ui.label("This layer");
+                                ui.add(egui::Slider::new(&mut bi[0], 0.0..=1.0).text("black"));
+                                ui.add(egui::Slider::new(&mut bi[1], 0.0..=1.0).text("white"));
+                                ui.label("Underlying");
+                                ui.add(egui::Slider::new(&mut bi[2], 0.0..=1.0).text("black"));
+                                ui.add(egui::Slider::new(&mut bi[3], 0.0..=1.0).text("white"));
                             }
                         });
-                    ui.separator();
-                }
 
-                // Apply structural layer changes after the loop.
-                let ls = &mut self.doc.layers.layers;
-                match action {
-                    LayerAction::None => {}
-                    LayerAction::Delete(id) => {
-                        if ls.len() > 1 {
-                            ls.retain(|l| l.id != id);
-                            with_gpu(frame, |gpu, _, _| gpu.drop_layer(id));
-                            if self.doc.active_layer == Some(id) {
-                                self.doc.active_layer = ls.last().map(|l| l.id);
+                        ui.separator();
+                        egui::CollapsingHeader::new("Layer style: Stroke").show(ui, |ui| {
+                            let id = self.active_id();
+                            let mut on = self.layer_strokes.contains_key(&id);
+                            if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                                if on {
+                                    self.layer_strokes.insert(id, ([0.0, 0.0, 0.0, 1.0], 4.0));
+                                } else {
+                                    self.layer_strokes.remove(&id);
+                                }
+                                self.force_composite = true;
                             }
-                            self.background_id =
-                                ls.first().map(|l| l.id).unwrap_or(self.background_id);
+                            if let Some((color, width)) = self.layer_strokes.get_mut(&id) {
+                                let mut rgb = [color[0], color[1], color[2]];
+                                if ui.color_edit_button_rgb(&mut rgb).changed() {
+                                    *color = [rgb[0], rgb[1], rgb[2], color[3]];
+                                    self.force_composite = true;
+                                }
+                                if ui
+                                    .add(egui::Slider::new(width, 1.0..=40.0).text("width px"))
+                                    .changed()
+                                {
+                                    self.force_composite = true;
+                                }
+                            }
+                        });
+
+                        ui.separator();
+                        egui::CollapsingHeader::new("Channels").show(ui, |ui| {
+                            let names = with_gpu(frame, |gpu, _, _| gpu.channel_names())
+                                .unwrap_or_default();
+                            if ui
+                                .add_enabled(
+                                    self.selection_active,
+                                    egui::Button::new("Save selection as channel"),
+                                )
+                                .clicked()
+                            {
+                                let name = format!("Alpha {}", names.len() + 1);
+                                with_gpu(frame, |gpu, d, q| {
+                                    gpu.save_selection_as_channel(d, q, name)
+                                });
+                            }
+                            for name in names {
+                                ui.horizontal(|ui| {
+                                    ui.label(&name);
+                                    if ui.small_button("Load").clicked() {
+                                        let n = name.clone();
+                                        with_gpu(frame, |gpu, d, q| gpu.load_channel(d, q, &n));
+                                        self.selection_active = true;
+                                        self.force_composite = true;
+                                    }
+                                    if ui.small_button("✕").clicked() {
+                                        let n = name.clone();
+                                        with_gpu(frame, |gpu, _, _| gpu.delete_channel(&n));
+                                    }
+                                });
+                            }
+                        });
+
+                        ui.separator();
+                        egui::CollapsingHeader::new("Histogram").show(ui, |ui| {
+                            if ui.button("Refresh").clicked() {
+                                self.refresh_histogram(frame);
+                            }
+                            if let Some(h) = &self.hist {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 64.0),
+                                    egui::Sense::hover(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(rect, 2.0, egui::Color32::from_gray(18));
+                                let max = h.luma.iter().copied().max().unwrap_or(1).max(1) as f32;
+                                let n = h.luma.len().max(1);
+                                for (i, &c) in h.luma.iter().enumerate() {
+                                    let x = rect.left() + rect.width() * i as f32 / n as f32;
+                                    let bh = rect.height() * (c as f32 / max);
+                                    painter.line_segment(
+                                        [
+                                            egui::pos2(x, rect.bottom()),
+                                            egui::pos2(x, rect.bottom() - bh),
+                                        ],
+                                        egui::Stroke::new(1.0, egui::Color32::from_gray(200)),
+                                    );
+                                }
+                            }
+                        });
+
+                        ui.separator();
+                        let (undos, redos) =
+                            with_gpu(frame, |gpu, _, _| gpu.history_labels()).unwrap_or_default();
+                        egui::CollapsingHeader::new(format!(
+                            "History  ({} / {})",
+                            undos.len(),
+                            redos.len()
+                        ))
+                        .show(ui, |ui| {
+                            // Future states (redoable), furthest first.
+                            for (i, l) in redos.iter().enumerate().rev() {
+                                if ui.small_button(format!("redo  {l}")).clicked() {
+                                    self.redo_count += (i + 1) as u32;
+                                }
+                            }
+                            ui.label("—— now ——");
+                            // Past states (undoable), newest first.
+                            for (i, l) in undos.iter().rev().enumerate() {
+                                if ui.small_button(format!("undo  {l}")).clicked() {
+                                    self.undo_count += (i + 1) as u32;
+                                }
+                            }
+                        });
+
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.heading("Layers");
+                            if ui
+                                .button(egui::RichText::new(crate::icons::PLUS_LAYER).size(18.0))
+                                .on_hover_text("New layer")
+                                .clicked()
+                            {
+                                let id = self
+                                    .doc
+                                    .layers
+                                    .add_raster(format!("Layer {}", self.doc.layers.layers.len()));
+                                self.doc.active_layer = Some(id);
+                            }
+                            ui.menu_button("Adj", |ui| {
+                                for adj in Adjustment::defaults() {
+                                    if ui.button(adj.name()).clicked() {
+                                        let id = self.doc.layers.add_adjustment(adj);
+                                        self.doc.active_layer = Some(id);
+                                        ui.close_menu();
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text("New adjustment layer");
+                            ui.menu_button("Mask", |ui| {
+                                let has = self.masked_layers.contains(&self.active_id());
+                                if ui.button("Add white mask").clicked() {
+                                    self.add_mask(frame, false);
+                                    ui.close_menu();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.selection_active,
+                                        egui::Button::new("Add from selection"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.add_mask(frame, true);
+                                    ui.close_menu();
+                                }
+                                if ui
+                                    .add_enabled(has, egui::Button::new("Delete mask"))
+                                    .clicked()
+                                {
+                                    self.delete_mask(frame);
+                                    ui.close_menu();
+                                }
+                                ui.add_enabled(
+                                    has,
+                                    egui::Checkbox::new(
+                                        &mut self.edit_mask,
+                                        "Edit mask (brush=reveal, eraser=hide)",
+                                    ),
+                                );
+                            });
+                        });
+                        ui.separator();
+
+                        let active = self.active_id();
+                        let mut action = LayerAction::None;
+                        let ids: Vec<LayerId> =
+                            self.doc.layers.layers.iter().rev().map(|l| l.id).collect();
+                        for id in ids {
+                            let layer = self.doc.layers.get_mut(id).unwrap();
+                            let is_active = id == active;
+                            egui::Frame::NONE
+                                .fill(if is_active {
+                                    egui::Color32::from_rgb(50, 70, 100)
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                })
+                                .inner_margin(4.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        let eye = if layer.visible {
+                                            crate::icons::EYE
+                                        } else {
+                                            " "
+                                        };
+                                        if ui
+                                            .selectable_label(
+                                                layer.visible,
+                                                egui::RichText::new(eye).size(15.0),
+                                            )
+                                            .on_hover_text("Toggle visibility")
+                                            .clicked()
+                                        {
+                                            layer.visible = !layer.visible;
+                                        }
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut layer.name)
+                                                .desired_width(90.0),
+                                        );
+                                        if ui
+                                            .small_button(crate::icons::ARROW_UP)
+                                            .on_hover_text("Move up")
+                                            .clicked()
+                                        {
+                                            action = LayerAction::MoveUp(id);
+                                        }
+                                        if ui
+                                            .small_button(crate::icons::ARROW_DOWN)
+                                            .on_hover_text("Move down")
+                                            .clicked()
+                                        {
+                                            action = LayerAction::MoveDown(id);
+                                        }
+                                        if ui
+                                            .small_button(crate::icons::TRASH)
+                                            .on_hover_text("Delete layer")
+                                            .clicked()
+                                        {
+                                            action = LayerAction::Delete(id);
+                                        }
+                                    });
+                                    let is_adjustment =
+                                        matches!(layer.kind, LayerKind::Adjustment(_));
+                                    ui.horizontal(|ui| {
+                                        if ui.selectable_label(is_active, "active").clicked() {
+                                            self.doc.active_layer = Some(id);
+                                        }
+                                        if !is_adjustment {
+                                            egui::ComboBox::from_id_salt(("blend", id.0))
+                                                .selected_text(format!("{:?}", layer.blend))
+                                                .width(120.0)
+                                                .show_ui(ui, |ui| {
+                                                    for mode in BlendMode::ALL {
+                                                        ui.selectable_value(
+                                                            &mut layer.blend,
+                                                            mode,
+                                                            format!("{mode:?}"),
+                                                        );
+                                                    }
+                                                });
+                                        }
+                                    });
+                                    ui.add(
+                                        egui::Slider::new(&mut layer.opacity, 0.0..=1.0)
+                                            .show_value(false)
+                                            .text("opacity"),
+                                    );
+                                    match &mut layer.kind {
+                                        LayerKind::Adjustment(adj) => adjustment_ui(ui, adj),
+                                        LayerKind::Text(t) => {
+                                            ui.add(
+                                                egui::TextEdit::singleline(&mut t.text)
+                                                    .desired_width(150.0),
+                                            );
+                                            ui.add(
+                                                egui::Slider::new(&mut t.font_px, 6.0..=300.0)
+                                                    .text("size"),
+                                            );
+                                            let mut col = srgba_to_color(t.color);
+                                            if ui.color_edit_button_srgba(&mut col).changed() {
+                                                t.color = color_to_srgba(col);
+                                            }
+                                            ui.horizontal(|ui| {
+                                                ui.selectable_value(&mut t.align, 0, "L");
+                                                ui.selectable_value(&mut t.align, 1, "C");
+                                                ui.selectable_value(&mut t.align, 2, "R");
+                                            });
+                                        }
+                                        LayerKind::Vector(v) => {
+                                            let mut col = srgba_to_color(v.color);
+                                            if ui.color_edit_button_srgba(&mut col).changed() {
+                                                v.color = color_to_srgba(col);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                });
+                            ui.separator();
                         }
-                    }
-                    LayerAction::MoveUp(id) => {
-                        if let Some(i) = ls.iter().position(|l| l.id == id) {
-                            if i + 1 < ls.len() {
-                                ls.swap(i, i + 1);
+
+                        // Apply structural layer changes after the loop.
+                        let ls = &mut self.doc.layers.layers;
+                        match action {
+                            LayerAction::None => {}
+                            LayerAction::Delete(id) => {
+                                if ls.len() > 1 {
+                                    ls.retain(|l| l.id != id);
+                                    with_gpu(frame, |gpu, _, _| gpu.drop_layer(id));
+                                    if self.doc.active_layer == Some(id) {
+                                        self.doc.active_layer = ls.last().map(|l| l.id);
+                                    }
+                                    self.background_id =
+                                        ls.first().map(|l| l.id).unwrap_or(self.background_id);
+                                }
+                            }
+                            LayerAction::MoveUp(id) => {
+                                if let Some(i) = ls.iter().position(|l| l.id == id) {
+                                    if i + 1 < ls.len() {
+                                        ls.swap(i, i + 1);
+                                    }
+                                }
+                            }
+                            LayerAction::MoveDown(id) => {
+                                if let Some(i) = ls.iter().position(|l| l.id == id) {
+                                    if i > 0 {
+                                        ls.swap(i, i - 1);
+                                    }
+                                }
                             }
                         }
-                    }
-                    LayerAction::MoveDown(id) => {
-                        if let Some(i) = ls.iter().position(|l| l.id == id) {
-                            if i > 0 {
-                                ls.swap(i, i - 1);
-                            }
-                        }
-                    }
-                }
+                    });
             });
 
         egui::CentralPanel::default()
