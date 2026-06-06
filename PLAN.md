@@ -159,15 +159,16 @@ pigment/
 
 **Deferred (polish):** free-transform *rotation/skew* + interactive corner/rotate handles (current transform is translate + uniform scale via Shift-drag; the composite affine already supports rotation — only the handle UI + aspect-correct rotation math remain). Modifier preview during marquee uses replace-then-combine.
 
-### Phase 3 — Adjustments, masks, filters  *(real photo editing)*
-- [ ] Adjustment layers (read backdrop, transform): Levels, Curves, Brightness/Contrast, Hue/Sat, Color Balance, Exposure, Black&White, Invert, Threshold
-- [ ] Curves UI widget (spline editor) + per-channel
-- [ ] Layer masks (paint to reveal/hide; `α *= mask`), clipping masks, group masks
-- [ ] Filters as GPU passes: Gaussian blur, Box/Motion blur, Sharpen/Unsharp, Noise, Pixelate
-- [ ] Layer styles: stroke, drop shadow, inner shadow, outer/inner glow, color/gradient overlay
-- [ ] HSL non-separable blend modes (Hue/Saturation/Color/Luminosity)
-- [ ] Histogram panel
-- [ ] **DoD:** non-destructive adjustment stack + masks + core filters
+### Phase 3 — Adjustments, masks, filters  *(COMPLETE)*
+- [x] Adjustment layers (read backdrop, transform): Brightness/Contrast, Levels, Hue/Saturation, Exposure, Invert, Threshold, Black&White — non-destructive, live param sliders (`pigment_core::adjust` + composite-shader branch)
+- [x] Layer masks (`α *= mask`): add white / from selection / delete; paint reveal (brush) / hide (eraser); composite multiplies layer alpha by mask
+- [x] Filters as GPU passes: Gaussian blur (separable), Sharpen (unsharp), Pixelate — destructive on the active layer, undoable
+- [x] HSL non-separable blend modes (Hue/Saturation/Color/Luminosity) + the previously-missing separable modes — all 18 now correct
+- [x] Histogram panel (Rec.709 luma + per-channel, `pigment_core::histogram`)
+- [x] Tests: core `adjust`/`curve`/`histogram` + GPU adjustment-invert & layer-mask
+- [x] **DoD met:** non-destructive adjustment stack + masks + core filters
+
+**Deferred (polish):** Curves spline-editor UI (the monotone-cubic LUT builder exists in `pigment_core::curve`, only the draggable widget + a Curves adjustment kind remain); Color Balance / per-channel curves; clipping & group masks; layer styles (stroke/shadow/glow); motion blur / noise.
 
 ### Phase 4 — Text, vector, smart objects  *(general-purpose 1.0)*
 - [ ] Text layers: `cosmic-text` editable buffer → `glyphon` atlas → layer tile cache; font/size/color/align/spacing
