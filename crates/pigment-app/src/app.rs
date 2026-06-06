@@ -6,6 +6,7 @@ use eframe::wgpu;
 use half::f16;
 use pigment_core::color::{linear_to_srgb, srgb_to_linear};
 use pigment_core::fill::flood_fill_mask;
+use pigment_core::raster::{self, CombineMode};
 use pigment_core::{BlendMode, Document, Layer, LayerId, Size};
 use pigment_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
 use pigment_io::LoadedImage;
@@ -119,6 +120,10 @@ pub struct PigmentApp {
     sel_drag_start: Option<egui::Vec2>,
     sel_op_pending: Option<SelectionOp>,
     selection_active: bool,
+    sel_base: Vec<f32>,        // selection snapshot at op start (for combine)
+    sel_mode: CombineMode,     // current modifier-derived combine mode
+    lasso_points: Vec<egui::Vec2>, // in-progress lasso (document px)
+    feather_radius: f32,
 }
 
 impl PigmentApp {
@@ -167,7 +172,45 @@ impl PigmentApp {
             sel_drag_start: None,
             sel_op_pending: None,
             selection_active: false,
+            sel_base: Vec::new(),
+            sel_mode: CombineMode::Replace,
+            lasso_points: Vec::new(),
+            feather_radius: 2.0,
         }
+    }
+
+    /// Read the current GPU selection mask (zeros if none active).
+    fn read_selection(&mut self, frame: &mut eframe::Frame) -> Vec<f32> {
+        let n = (self.doc.size.width * self.doc.size.height) as usize;
+        if !self.selection_active {
+            return vec![0.0; n];
+        }
+        with_gpu(frame, |gpu, device, queue| gpu.read_selection(device, queue))
+            .flatten()
+            .unwrap_or_else(|| vec![0.0; n])
+    }
+
+    /// Upload a CPU selection mask and mark a selection active.
+    fn set_selection(&mut self, frame: &mut eframe::Frame, mask: &[f32]) {
+        with_gpu(frame, |gpu, _, queue| gpu.upload_selection(queue, mask));
+        self.selection_active = true;
+    }
+
+    /// Read → transform → upload the selection (feather / grow / shrink).
+    fn map_selection(&mut self, frame: &mut eframe::Frame, f: impl Fn(&[f32], u32, u32) -> Vec<f32>) {
+        if !self.selection_active {
+            return;
+        }
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let cur = self.read_selection(frame);
+        let next = f(&cur, w, h);
+        self.set_selection(frame, &next);
+    }
+
+    /// Combine a freshly-computed mask with the op's base per the active mode.
+    fn commit_selection(&mut self, frame: &mut eframe::Frame, new_mask: Vec<f32>) {
+        let combined = raster::combine(&self.sel_base, &new_mask, self.sel_mode);
+        self.set_selection(frame, &combined);
     }
 
     /// Grow the current stroke's dirty bounding box by a dab at `p` of radius `r`.
@@ -362,6 +405,7 @@ impl PigmentApp {
         let tol = self.fill_tolerance;
         let contiguous = self.fill_contiguous;
         let sample_all = self.sample_all;
+        let has_sel = self.selection_active;
         let order = self.layer_order();
         with_gpu(frame, |gpu, device, queue| {
             gpu.begin_command_now(device, queue, active, "Fill");
@@ -375,11 +419,14 @@ impl PigmentApp {
             let Some(sample) = sample else { return };
             let sbuf = f16_bytes_to_f32(&sample);
             let mask = flood_fill_mask(&sbuf, w, h, seed.0, seed.1, tol, contiguous);
+            // Constrain the fill to the active selection, if any.
+            let sel = if has_sel { gpu.read_selection(device, queue) } else { None };
             // Write target is always the active layer.
             let Some(active_bytes) = gpu.read_layer(device, queue, active) else { return };
             let mut abuf = f16_bytes_to_f32(&active_bytes);
             for (i, &m) in mask.iter().enumerate() {
-                if m {
+                let selected = sel.as_ref().map_or(true, |s| s[i] > 0.5);
+                if m && selected {
                     let o = i * 4;
                     abuf[o..o + 4].copy_from_slice(&fill);
                 }
@@ -387,6 +434,24 @@ impl PigmentApp {
             gpu.upload_layer(queue, active, &f32_to_f16_bytes(&abuf));
         });
         self.force_composite = true;
+    }
+
+    /// Magic wand: flood the composite at `seed` within tolerance → selection.
+    fn do_magic_wand(&mut self, frame: &mut eframe::Frame, seed: (u32, u32)) {
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let order = self.layer_order();
+        let (tol, contiguous) = (self.fill_tolerance, self.fill_contiguous);
+        let comp = with_gpu(frame, |gpu, device, queue| {
+            let p = gpu.composite_now(device, queue, &order);
+            gpu.read_composite(device, queue, p)
+        })
+        .flatten();
+        self.force_composite = true;
+        let Some(bytes) = comp else { return };
+        let buf = f16_bytes_to_f32(&bytes);
+        let mask_b = flood_fill_mask(&buf, w, h, seed.0, seed.1, tol, contiguous);
+        let mask: Vec<f32> = mask_b.iter().map(|&b| if b { 1.0 } else { 0.0 }).collect();
+        self.commit_selection(frame, mask);
     }
 
     fn do_eyedrop(&mut self, frame: &mut eframe::Frame, seed: (u32, u32)) {
@@ -420,6 +485,47 @@ fn screen_to_doc(p: egui::Pos2, doc_rect: egui::Rect, size: Size) -> egui::Vec2 
     let u = (p.x - doc_rect.min.x) / doc_rect.width().max(1e-3);
     let v = (p.y - doc_rect.min.y) / doc_rect.height().max(1e-3);
     egui::vec2(u * size.width as f32, v * size.height as f32)
+}
+
+fn doc_to_screen(p: egui::Vec2, doc_rect: egui::Rect, size: Size) -> egui::Pos2 {
+    doc_rect.min
+        + egui::vec2(
+            p.x / size.width as f32 * doc_rect.width(),
+            p.y / size.height as f32 * doc_rect.height(),
+        )
+}
+
+/// Shift = add, Alt = subtract, Shift+Alt = intersect, else replace.
+fn mode_from_modifiers(m: egui::Modifiers) -> CombineMode {
+    match (m.shift, m.alt) {
+        (true, false) => CombineMode::Add,
+        (false, true) => CombineMode::Subtract,
+        (true, true) => CombineMode::Intersect,
+        _ => CombineMode::Replace,
+    }
+}
+
+/// Rasterize a rectangle/ellipse marquee to a 0/1 selection mask.
+fn shape_mask(rect: [f32; 4], ellipse: bool, w: u32, h: u32) -> Vec<f32> {
+    let [rx, ry, rw, rh] = rect;
+    let (cx, cy) = (rx + rw * 0.5, ry + rh * 0.5);
+    let (hx, hy) = ((rw * 0.5).max(1e-3), (rh * 0.5).max(1e-3));
+    let mut m = vec![0.0; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let inside = if ellipse {
+                let (dx, dy) = ((px - cx) / hx, (py - cy) / hy);
+                dx * dx + dy * dy <= 1.0
+            } else {
+                px >= rx && px <= rx + rw && py >= ry && py <= ry + rh
+            };
+            if inside {
+                m[(y * w + x) as usize] = 1.0;
+            }
+        }
+    }
+    m
 }
 
 fn clamp_seed(p: egui::Vec2, size: Size) -> Option<(u32, u32)> {
@@ -483,6 +589,21 @@ impl eframe::App for PigmentApp {
                     if ui.button("Invert").clicked() {
                         self.sel_op_pending = Some(SelectionOp::Invert);
                         self.selection_active = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.add(egui::Slider::new(&mut self.feather_radius, 0.0..=30.0).text("feather px"));
+                    if ui.button("Feather").clicked() {
+                        let r = self.feather_radius;
+                        self.map_selection(frame, move |m, w, h| raster::feather(m, w, h, r));
+                        ui.close_menu();
+                    }
+                    if ui.button("Grow 1px").clicked() {
+                        self.map_selection(frame, |m, w, h| raster::grow_shrink(m, w, h, 1));
+                        ui.close_menu();
+                    }
+                    if ui.button("Shrink 1px").clicked() {
+                        self.map_selection(frame, |m, w, h| raster::grow_shrink(m, w, h, -1));
                         ui.close_menu();
                     }
                 });
@@ -725,8 +846,8 @@ impl eframe::App for PigmentApp {
                             self.view.pan += response.drag_delta();
                         }
                     }
-                    // Implemented in later Phase 2 waves.
-                    Tool::MoveLayer | Tool::Lasso | Tool::MagicWand | Tool::Transform | Tool::Crop => {}
+                    // Implemented in a later Phase 2 wave.
+                    Tool::MoveLayer | Tool::Transform | Tool::Crop => {}
                     Tool::Brush | Tool::Eraser => {
                         let spacing = (self.brush_size * 0.15).max(0.75);
                         let dt = ui.input(|i| i.stable_dt).max(1e-3);
@@ -808,6 +929,8 @@ impl eframe::App for PigmentApp {
                         if response.drag_started() {
                             if let Some(p) = response.interact_pointer_pos() {
                                 self.sel_drag_start = Some(screen_to_doc(p, doc_rect, self.doc.size));
+                                self.sel_mode = mode_from_modifiers(ui.input(|i| i.modifiers));
+                                self.sel_base = self.read_selection(frame);
                             }
                         }
                         if response.dragged() {
@@ -815,18 +938,73 @@ impl eframe::App for PigmentApp {
                                 (self.sel_drag_start, response.interact_pointer_pos())
                             {
                                 let cur = screen_to_doc(p, doc_rect, self.doc.size);
-                                let x = start.x.min(cur.x);
-                                let y = start.y.min(cur.y);
-                                let w = (start.x - cur.x).abs();
-                                let h = (start.y - cur.y).abs();
-                                self.sel_op_pending =
-                                    Some(SelectionOp::Marquee { rect: [x, y, w, h], ellipse });
-                                self.selection_active = true;
+                                let rect = [
+                                    start.x.min(cur.x),
+                                    start.y.min(cur.y),
+                                    (start.x - cur.x).abs(),
+                                    (start.y - cur.y).abs(),
+                                ];
+                                let (w, h) = (self.doc.size.width, self.doc.size.height);
+                                let shape = shape_mask(rect, ellipse, w, h);
+                                self.commit_selection(frame, shape);
                             }
                             ui.ctx().request_repaint();
                         }
                         if response.drag_stopped() {
                             self.sel_drag_start = None;
+                        }
+                    }
+                    Tool::Lasso => {
+                        if response.drag_started() {
+                            self.lasso_points.clear();
+                            self.sel_mode = mode_from_modifiers(ui.input(|i| i.modifiers));
+                            self.sel_base = self.read_selection(frame);
+                            if let Some(p) = response.interact_pointer_pos() {
+                                self.lasso_points.push(screen_to_doc(p, doc_rect, self.doc.size));
+                            }
+                        }
+                        if response.dragged() {
+                            if let Some(p) = response.interact_pointer_pos() {
+                                let d = screen_to_doc(p, doc_rect, self.doc.size);
+                                if self.lasso_points.last().is_none_or(|l| (*l - d).length() > 2.0) {
+                                    self.lasso_points.push(d);
+                                }
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped() {
+                            if self.lasso_points.len() >= 3 {
+                                let (w, h) = (self.doc.size.width, self.doc.size.height);
+                                let pts: Vec<(f32, f32)> =
+                                    self.lasso_points.iter().map(|v| (v.x, v.y)).collect();
+                                let mask = raster::polygon_mask(&pts, w, h);
+                                self.commit_selection(frame, mask);
+                            }
+                            self.lasso_points.clear();
+                        }
+                        // Draw the in-progress lasso path.
+                        if self.lasso_points.len() >= 2 {
+                            let pts: Vec<egui::Pos2> = self
+                                .lasso_points
+                                .iter()
+                                .map(|v| doc_to_screen(*v, doc_rect, self.doc.size))
+                                .collect();
+                            ui.painter().add(egui::Shape::line(
+                                pts,
+                                egui::Stroke::new(1.5, egui::Color32::WHITE),
+                            ));
+                        }
+                    }
+                    Tool::MagicWand => {
+                        if response.clicked() {
+                            if let Some(p) = response.interact_pointer_pos() {
+                                let d = screen_to_doc(p, doc_rect, self.doc.size);
+                                if let Some(seed) = clamp_seed(d, self.doc.size) {
+                                    self.sel_mode = mode_from_modifiers(ui.input(|i| i.modifiers));
+                                    self.sel_base = self.read_selection(frame);
+                                    self.do_magic_wand(frame, seed);
+                                }
+                            }
                         }
                     }
                 }

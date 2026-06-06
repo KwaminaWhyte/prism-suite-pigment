@@ -648,6 +648,76 @@ impl CanvasGpu {
         self.readback_pixel(device, queue, self.target_tex(is_ping)?, x, y)
     }
 
+    /// Read the selection mask to CPU as one f32 per pixel (len = w*h).
+    pub fn read_selection(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<f32>> {
+        let sel = self.selection.as_ref()?;
+        let (w, h) = (self.canvas_size.width, self.canvas_size.height);
+        let unpadded = w * 2; // R16
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = unpadded.div_ceil(align) * align;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sel.readback"),
+            size: (padded * h) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &sel.tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok()?;
+        let data = slice.get_mapped_range();
+        let mut out = Vec::with_capacity((w * h) as usize);
+        for row in 0..h {
+            let s = (row * padded) as usize;
+            for px in data[s..s + unpadded as usize].chunks_exact(2) {
+                out.push(half::f16::from_le_bytes([px[0], px[1]]).to_f32());
+            }
+        }
+        drop(data);
+        buf.unmap();
+        Some(out)
+    }
+
+    /// Upload a CPU selection mask (one f32 per pixel) and mark a selection active.
+    pub fn upload_selection(&mut self, queue: &wgpu::Queue, mask: &[f32]) {
+        let Some(sel) = self.selection.as_ref() else { return };
+        let (w, h) = (self.canvas_size.width, self.canvas_size.height);
+        let mut bytes = Vec::with_capacity(mask.len() * 2);
+        for &m in mask {
+            bytes.extend_from_slice(&half::f16::from_f32(m).to_le_bytes());
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &sel.tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 2), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.has_selection = true;
+    }
+
     fn new_region_tex(&self, device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("undo.region"),
