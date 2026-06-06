@@ -63,3 +63,23 @@ impl BlendMode {
         BlendMode::LinearBurn,
     ];
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shader_ids_are_stable() {
+        // These are serialized to disk + passed to shaders. Must not drift.
+        assert_eq!(BlendMode::Normal.shader_id(), 0);
+        assert_eq!(BlendMode::Multiply.shader_id(), 1);
+        assert_eq!(BlendMode::LinearDodge.shader_id(), 12);
+        assert_eq!(BlendMode::Luminosity.shader_id(), 23);
+    }
+
+    #[test]
+    fn fixed_function_set() {
+        assert!(BlendMode::Normal.is_fixed_function());
+        assert!(!BlendMode::Overlay.is_fixed_function());
+    }
+}

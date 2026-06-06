@@ -54,3 +54,24 @@ impl Default for Tile {
         Tile { pixels: vec![0.0; len].into_boxed_slice() }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pixel_to_tile() {
+        assert_eq!(TileCoord::from_pixel(0, 0), TileCoord::new(0, 0));
+        assert_eq!(TileCoord::from_pixel(255, 255), TileCoord::new(0, 0));
+        assert_eq!(TileCoord::from_pixel(256, 0), TileCoord::new(1, 0));
+        // Negative coords floor toward -inf (tile -1), not toward zero.
+        assert_eq!(TileCoord::from_pixel(-1, -1), TileCoord::new(-1, -1));
+    }
+
+    #[test]
+    fn transparent_tile_is_zeroed() {
+        let t = Tile::transparent();
+        assert_eq!(t.pixels.len(), (TILE_SIZE * TILE_SIZE * 4) as usize);
+        assert!(t.pixels.iter().all(|&c| c == 0.0));
+    }
+}

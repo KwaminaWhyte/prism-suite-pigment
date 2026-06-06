@@ -42,7 +42,33 @@ crates/
 - egui target is non-sRGB `Bgra8Unorm`; P0 passes sRGB-encoded bytes straight through
   (`Rgba8Unorm` sample). Real linear compositing → f16 offscreen + encode-at-blit in P1.
 
-## Next: Phase 1 (planned)
-Tile model on GPU (atlas + page table), compositor over dirty tiles (f16 linear,
-premultiplied), layers panel wired to real layers, brush engine v1 (wet layer),
-undo command stack. See PLAN.md §4 Phase 1.
+## Phase 1 (in progress) — GPU compositor + brush
+
+`canvas.rs` replaced the Phase 0 single-quad renderer with a real compositor
+(`CanvasGpu`, one egui callback resource):
+
+- **Layers** — each raster layer is one canvas-sized `Rgba16Float` linear-premul
+  texture (`GpuLayer`). Tiling/atlas is the next refinement (a layer is currently
+  a degenerate single tile).
+- **Brush** (`dab.wgsl`) — app's arc-length walker emits instanced `Dab`s in doc
+  space; `paint_dabs` renders them into the active layer with premultiplied-over
+  blending. `app.rs` maps screen→doc via `doc_rect` and brackets strokes with
+  drag_started/stopped.
+- **Compositor** (`composite.wgsl`) — ping-pong over two targets; each visible
+  layer samples (backdrop, layer) and writes the blended result. Per-layer
+  opacity/blend supplied via one uniform buffer with **dynamic offsets**
+  (256-byte stride). Blend modes in-shader (Normal/Multiply/Screen/Overlay/
+  Darken/Lighten/Add so far).
+- **Display** (`display.wgsl`) — runs inside egui's pass; samples the final
+  composite, composites over the checkerboard in linear light, sRGB-encodes to
+  the non-sRGB egui target.
+
+All compositor passes are recorded into egui's own `CommandEncoder` in
+`prepare()` (no separate submit); `paint()` only issues the display draw.
+
+Known shortcuts to revisit: recomposite-every-frame (no dirty tracking), no
+wet-layer/pressure, no undo yet, no tile streaming. See PLAN.md §4 Phase 1.
+
+## Next
+Tile model + dirty-tile invalidation, undo (readback snapshot pattern verified),
+eraser/fill/eyedropper, `.pigment` save/load.

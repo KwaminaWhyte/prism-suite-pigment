@@ -124,15 +124,19 @@ pigment/
 - [x] **DoD met:** builds, launches (Metal/wgpu 29), opens PNG/JPEG/etc, pan/zoom works, HiDPI-aware
 - [ ] *Follow-up:* migrate off egui 0.34 deprecated panel/menu aliases; screenshot/CI smoke test
 
-### Phase 1 — Tiles, layers, paint  *(MVP painting)*
-- [ ] Tile model: sparse map, `Rgba16Float` linear-premul tiles, COW via `Arc`
+### Phase 1 — Tiles, layers, paint  *(MVP painting — IN PROGRESS)*
+- [x] Compositor v1: GPU ping-pong, layers as `Rgba16Float` linear-premul textures, display pass (checker + sRGB encode)
+- [x] Blend modes as shaders: Normal, Multiply, Screen, Overlay, Darken, Lighten, Add (rest of the separable + HSL set: TODO)
+- [x] Layers panel: add, visibility toggle, opacity slider, blend-mode dropdown, active-layer select
+- [x] Brush engine v1: arc-length dab walker, instanced soft dabs, size/hardness/opacity, color picker
+- [x] Image loads into the background layer (linear-premul f16 conversion)
+- [x] Core unit tests (color roundtrip, blend ids, tile coords)
+- [ ] **Tile model:** sparse map + `Rgba16Float` tiles + COW (`Arc`) — currently full-canvas textures (degenerate single tile)
 - [ ] `TileCache`: GPU atlas + indirection/page table; LRU residency; RAM spill
-- [ ] Compositor v1: composite raster layers (Normal mode) over dirty tiles → display
-- [ ] Layers panel: add/delete/reorder, visibility toggle, opacity slider, rename
-- [ ] Blend modes as shaders: Normal, Multiply, Screen, Overlay, Darken, Lighten, Add, Difference, HardLight, SoftLight, ColorDodge, ColorBurn (+ HSL set later)
-- [ ] Brush engine v1: dab walker, wet layer, pressure (size/opacity), hardness
-- [ ] Eraser, bucket fill, eyedropper, color picker panel
-- [ ] CommandStack: undo/redo + History panel; tile-COW pixel snapshots
+- [ ] Wet-layer separation (in-progress stroke buffer) + pressure (tablet via `octotablet`)
+- [ ] Dirty-tile invalidation (currently recomposite every frame)
+- [ ] Eraser, bucket fill, eyedropper; layer delete/reorder/rename
+- [ ] CommandStack: undo/redo + History panel; tile-COW pixel snapshots (readback pattern ready)
 - [ ] `.pigment` doc format: serialize layer tree + tiles (lz4), load back
 - [ ] **DoD:** multi-layer painting with blend modes, undo, save/reopen
 

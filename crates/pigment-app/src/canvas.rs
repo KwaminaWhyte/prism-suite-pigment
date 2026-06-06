@@ -1,15 +1,36 @@
-//! The GPU canvas viewport: an `egui_wgpu` paint callback that draws the
-//! document (textured quad) with a transparency checkerboard behind it,
-//! positioned by a CPU-side pan/zoom transform. Phase 0 (PLAN.md §4).
+//! GPU canvas: per-layer Rgba16Float linear-premultiplied textures, a ping-pong
+//! compositor (blend modes in-shader), instanced brush-dab painting, and a
+//! display pass that composites over a checkerboard and sRGB-encodes for egui.
+//! Phase 1 (PLAN.md §4). Tiling/atlas is the next refinement — layers are
+//! currently one canvas-sized texture each (a degenerate single tile).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use eframe::egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use eframe::wgpu;
-use pigment_io::LoadedImage;
+use pigment_core::{LayerId, Size};
 
-/// Pan/zoom state for the viewport. Pan is in egui points; zoom is a scalar
-/// (1.0 = one document pixel per point).
+/// One instanced brush dab, in document pixel space; color is straight linear.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Dab {
+    pub center: [f32; 2],
+    pub radius: f32,
+    pub hardness: f32,
+    pub color: [f32; 4],
+}
+
+/// Per-frame layer compositing parameters supplied by the app.
+#[derive(Clone, Copy)]
+pub struct LayerDraw {
+    pub id: LayerId,
+    pub opacity: f32,
+    pub blend: u32,
+    pub visible: bool,
+}
+
+/// Pan/zoom state for the viewport.
 #[derive(Clone, Copy, Debug)]
 pub struct ViewTransform {
     pub pan: egui::Vec2,
@@ -23,12 +44,9 @@ impl Default for ViewTransform {
 }
 
 impl ViewTransform {
-    /// Zoom toward a cursor anchor (in points, relative to viewport center) so
-    /// the point under the cursor stays put.
     pub fn zoom_to(&mut self, factor: f32, anchor_from_center: egui::Vec2) {
         let new_zoom = (self.zoom * factor).clamp(0.02, 64.0);
         let real = new_zoom / self.zoom;
-        // Keep the anchor stationary: pan must scale about the anchor.
         self.pan = (self.pan - anchor_from_center) * real + anchor_from_center;
         self.zoom = new_zoom;
     }
@@ -36,201 +54,532 @@ impl ViewTransform {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct CanvasUniform {
+struct DisplayUniform {
     clip_min: [f32; 2],
     clip_max: [f32; 2],
     checker_px: f32,
     _pad: [f32; 3],
 }
 
-/// Long-lived GPU resources, stored in egui's `callback_resources`.
-pub struct CanvasRenderer {
-    uniform: wgpu::Buffer,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler_nearest: wgpu::Sampler,
-    pipeline_checker: wgpu::RenderPipeline,
-    pipeline_image: wgpu::RenderPipeline,
-    // Rebuilt when the loaded image changes.
-    bind_group: Option<wgpu::BindGroup>,
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CompositeParams {
+    opacity: f32,
+    blend_mode: u32,
+    _pad: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LayerInfo {
+    size: [f32; 2],
+    _pad: [f32; 2],
+}
+
+struct GpuLayer {
+    tex: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const MAX_LAYERS: u64 = 64;
+const PARAMS_STRIDE: u64 = 256; // min uniform dynamic-offset alignment
+
+fn make_target(device: &wgpu::Device, size: Size, label: &str) -> GpuLayer {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: size.width.max(1),
+            height: size.height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FMT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    GpuLayer { tex, view }
+}
+
+/// All long-lived canvas GPU state, stored as a single egui callback resource.
+pub struct CanvasGpu {
+    sampler: wgpu::Sampler,
+
+    // Compositor.
+    composite_pipeline: wgpu::RenderPipeline,
+    composite_bgl: wgpu::BindGroupLayout,
+    params_buf: wgpu::Buffer,
+
+    // Brush dabs.
+    dab_pipeline: wgpu::RenderPipeline,
+    dab_bgl: wgpu::BindGroupLayout,
+    dab_info_buf: wgpu::Buffer,
+    dab_instances: wgpu::Buffer,
+    dab_capacity: u64,
+
+    // Display.
+    display_pipeline: wgpu::RenderPipeline,
+    display_bgl: wgpu::BindGroupLayout,
+    display_uniform: wgpu::Buffer,
+    display_bind_group: Option<wgpu::BindGroup>,
+
+    // Document state mirror.
+    layers: HashMap<LayerId, GpuLayer>,
+    canvas_size: Size,
+    ping: Option<GpuLayer>,
+    pong: Option<GpuLayer>,
     image_gen: Option<u64>,
 }
 
-impl CanvasRenderer {
+impl CanvasGpu {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("canvas.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/canvas.wgsl").into()),
+        let composite_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("composite.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/composite.wgsl").into()),
+        });
+        let dab_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("dab.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/dab.wgsl").into()),
+        });
+        let display_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("display.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/display.wgsl").into()),
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("canvas.bgl"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("canvas.pl"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("canvas.sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
         });
 
-        let make_pipeline = |fs_entry: &str, label: &str, blend: Option<wgpu::BlendState>| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+        // --- Compositor pipeline ---
+        let composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("composite.bgl"),
+            entries: &[
+                sampler_entry(0),
+                tex_entry(1),
+                tex_entry(2),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<CompositeParams>() as u64,
+                        ),
+                    },
+                    count: None,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fs_entry),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-
-        let pipeline_checker = make_pipeline("fs_checker", "canvas.checker", None);
-        let pipeline_image = make_pipeline(
-            "fs_image",
-            "canvas.image",
-            Some(wgpu::BlendState::ALPHA_BLENDING),
+            ],
+        });
+        let composite_pipeline = make_render_pipeline(
+            device,
+            "composite",
+            &composite_mod,
+            &[&composite_bgl],
+            &[],
+            FMT,
+            None, // we overwrite every pixel (read backdrop via sampler)
         );
-
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("canvas.uniform"),
-            size: std::mem::size_of::<CanvasUniform>() as u64,
+        let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("composite.params"),
+            size: PARAMS_STRIDE * MAX_LAYERS,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("canvas.sampler.nearest"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
+        // --- Dab pipeline ---
+        let dab_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("dab.bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        const DAB_ATTRS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+            0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32x4
+        ];
+        let dab_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Dab>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &DAB_ATTRS,
+        };
+        let dab_pipeline = make_render_pipeline(
+            device,
+            "dab",
+            &dab_mod,
+            &[&dab_bgl],
+            std::slice::from_ref(&dab_layout),
+            FMT,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        );
+        let dab_info_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dab.info"),
+            size: std::mem::size_of::<LayerInfo>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dab_capacity = 1024;
+        let dab_instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dab.instances"),
+            size: dab_capacity * std::mem::size_of::<Dab>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // --- Display pipeline ---
+        let display_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("display.bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                sampler_entry(1),
+                tex_entry(2),
+            ],
+        });
+        let display_pipeline = make_render_pipeline(
+            device,
+            "display",
+            &display_mod,
+            &[&display_bgl],
+            &[],
+            target_format,
+            None,
+        );
+        let display_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("display.uniform"),
+            size: std::mem::size_of::<DisplayUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         Self {
-            uniform,
-            bind_group_layout,
-            sampler_nearest,
-            pipeline_checker,
-            pipeline_image,
-            bind_group: None,
+            sampler,
+            composite_pipeline,
+            composite_bgl,
+            params_buf,
+            dab_pipeline,
+            dab_bgl,
+            dab_info_buf,
+            dab_instances,
+            dab_capacity,
+            display_pipeline,
+            display_bgl,
+            display_uniform,
+            display_bind_group: None,
+            layers: HashMap::new(),
+            canvas_size: Size::new(1, 1),
+            ping: None,
+            pong: None,
             image_gen: None,
         }
     }
 
-    /// Upload a newly loaded image and (re)build the bind group.
-    fn ensure_image(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, gen: u64, img: &LoadedImage) {
+    fn ensure_canvas(&mut self, device: &wgpu::Device, size: Size) {
+        if self.canvas_size == size && self.ping.is_some() {
+            return;
+        }
+        self.canvas_size = size;
+        self.ping = Some(make_target(device, size, "composite.ping"));
+        self.pong = Some(make_target(device, size, "composite.pong"));
+        self.layers.clear(); // new document
+        self.image_gen = None;
+    }
+
+    fn ensure_layer(&mut self, device: &wgpu::Device, id: LayerId) {
+        let size = self.canvas_size;
+        self.layers
+            .entry(id)
+            .or_insert_with(|| make_target(device, size, "layer"));
+    }
+
+    fn upload_image(&mut self, queue: &wgpu::Queue, id: LayerId, gen: u64, f16: &[half::f16]) {
         if self.image_gen == Some(gen) {
             return;
         }
-        let size = wgpu::Extent3d {
-            width: img.size.width,
-            height: img.size.height,
-            depth_or_array_layers: 1,
-        };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("canvas.image.tex"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // egui's target is non-sRGB (Bgra8Unorm), i.e. it holds
-            // display-referred sRGB-encoded bytes. Sample the raw PNG bytes as
-            // Unorm and pass them straight through. The real compositor (Phase 1)
-            // renders to an f16 linear offscreen target and sRGB-encodes at blit.
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        let Some(layer) = self.layers.get(&id) else { return };
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &texture,
+                texture: &layer.tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &img.rgba8,
+            bytemuck::cast_slice(f16),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * img.size.width),
-                rows_per_image: Some(img.size.height),
+                bytes_per_row: Some(self.canvas_size.width * 4 * 2),
+                rows_per_image: Some(self.canvas_size.height),
             },
-            size,
+            wgpu::Extent3d {
+                width: self.canvas_size.width,
+                height: self.canvas_size.height,
+                depth_or_array_layers: 1,
+            },
         );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("canvas.bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler_nearest),
-                },
-            ],
-        });
-        self.bind_group = Some(bind_group);
         self.image_gen = Some(gen);
+    }
+
+    fn paint_dabs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        id: LayerId,
+        dabs: &[Dab],
+    ) {
+        if dabs.is_empty() {
+            return;
+        }
+        let Some(layer) = self.layers.get(&id) else { return };
+
+        if dabs.len() as u64 > self.dab_capacity {
+            self.dab_capacity = (dabs.len() as u64).next_power_of_two();
+            self.dab_instances = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("dab.instances"),
+                size: self.dab_capacity * std::mem::size_of::<Dab>() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        queue.write_buffer(&self.dab_instances, 0, bytemuck::cast_slice(dabs));
+        queue.write_buffer(
+            &self.dab_info_buf,
+            0,
+            bytemuck::bytes_of(&LayerInfo {
+                size: [self.canvas_size.width as f32, self.canvas_size.height as f32],
+                _pad: [0.0; 2],
+            }),
+        );
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("dab.bg"),
+            layout: &self.dab_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.dab_info_buf.as_entire_binding(),
+            }],
+        });
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("dab.pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &layer.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.dab_pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.set_vertex_buffer(0, self.dab_instances.slice(..));
+        pass.draw(0..6, 0..dabs.len() as u32);
+    }
+
+    /// Ping-pong composite all visible layers; returns the final view index.
+    fn composite(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        order: &[LayerDraw],
+    ) -> bool {
+        // Write all layer params up front (one buffer, dynamic offsets).
+        let visible: Vec<&LayerDraw> = order.iter().filter(|l| l.visible).collect();
+        for (i, l) in visible.iter().enumerate() {
+            let p = CompositeParams { opacity: l.opacity, blend_mode: l.blend, _pad: [0; 2] };
+            queue.write_buffer(&self.params_buf, i as u64 * PARAMS_STRIDE, bytemuck::bytes_of(&p));
+        }
+
+        let ping = self.ping.as_ref().unwrap();
+        let pong = self.pong.as_ref().unwrap();
+
+        // Clear ping to transparent — the initial backdrop (LoadOp::Clear, no draw).
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("composite.clear"),
+                color_attachments: &[Some(clear_attachment(&ping.view))],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+
+        let mut src_is_ping = true;
+        for (i, l) in visible.iter().enumerate() {
+            let Some(layer) = self.layers.get(&l.id) else { continue };
+            let (src, dst) = if src_is_ping { (ping, pong) } else { (pong, ping) };
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("composite.bg"),
+                layout: &self.composite_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src.view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&layer.view) },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.params_buf,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(std::mem::size_of::<CompositeParams>() as u64),
+                        }),
+                    },
+                ],
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("composite.layer"),
+                color_attachments: &[Some(clear_attachment(&dst.view))],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.composite_pipeline);
+            pass.set_bind_group(0, &bind, &[(i as u64 * PARAMS_STRIDE) as u32]);
+            pass.draw(0..3, 0..1);
+            drop(pass);
+            src_is_ping = !src_is_ping;
+        }
+        // Final result lives in `src` after the last swap.
+        src_is_ping
+    }
+
+    fn build_display_bind_group(&mut self, device: &wgpu::Device, final_is_ping: bool) {
+        let final_view = if final_is_ping {
+            &self.ping.as_ref().unwrap().view
+        } else {
+            &self.pong.as_ref().unwrap().view
+        };
+        self.display_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("display.bg"),
+            layout: &self.display_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.display_uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(final_view) },
+            ],
+        }));
     }
 }
 
-/// Per-frame paint callback carrying the document layout (cheap to clone:
-/// the image is shared via `Arc`).
+fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
+fn tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+/// A clear-to-transparent color attachment for `view` (helper for inline descriptors).
+fn clear_attachment(view: &wgpu::TextureView) -> wgpu::RenderPassColorAttachment<'_> {
+    wgpu::RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: wgpu::Operations {
+            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            store: wgpu::StoreOp::Store,
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_render_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    module: &wgpu::ShaderModule,
+    bind_group_layouts: &[&wgpu::BindGroupLayout],
+    vertex_buffers: &[wgpu::VertexBufferLayout],
+    format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> wgpu::RenderPipeline {
+    let bgls: Vec<Option<&wgpu::BindGroupLayout>> = bind_group_layouts.iter().map(|b| Some(*b)).collect();
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(label),
+        bind_group_layouts: &bgls,
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("vs_main"),
+            buffers: vertex_buffers,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Per-frame data the app hands to the canvas.
 pub struct CanvasPaint {
-    /// Document quad in egui screen points (pan/zoom already applied).
     pub doc_rect: egui::Rect,
     pub checker_pts: f32,
-    pub image: Option<(u64, Arc<LoadedImage>)>,
+    pub canvas_size: Size,
+    /// (generation, background layer id, linear-premultiplied f16 pixels).
+    pub image: Option<(u64, LayerId, Arc<Vec<half::f16>>)>,
+    pub layers: Vec<LayerDraw>,
+    pub active_id: LayerId,
+    pub dabs: Vec<Dab>,
 }
 
 impl CallbackTrait for CanvasPaint {
@@ -239,29 +588,36 @@ impl CallbackTrait for CanvasPaint {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen_descriptor: &ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut wgpu::CommandEncoder,
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let renderer: &mut CanvasRenderer = resources.get_mut().unwrap();
+        let gpu: &mut CanvasGpu = resources.get_mut().unwrap();
 
-        if let Some((gen, img)) = &self.image {
-            renderer.ensure_image(device, queue, *gen, img);
+        gpu.ensure_canvas(device, self.canvas_size);
+        for l in &self.layers {
+            gpu.ensure_layer(device, l.id);
         }
+        if let Some((gen, bg_id, f16)) = &self.image {
+            gpu.ensure_layer(device, *bg_id);
+            gpu.upload_image(queue, *bg_id, *gen, f16);
+        }
+
+        gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs);
+        let final_is_ping = gpu.composite(device, queue, encoder, &self.layers);
+        gpu.build_display_bind_group(device, final_is_ping);
 
         let [sw, sh] = screen_descriptor.size_in_pixels;
         let ppp = screen_descriptor.pixels_per_point;
         let to_clip = |p: egui::Pos2| -> [f32; 2] {
-            let px = p.x * ppp;
-            let py = p.y * ppp;
-            [px / sw as f32 * 2.0 - 1.0, 1.0 - py / sh as f32 * 2.0]
+            [p.x * ppp / sw as f32 * 2.0 - 1.0, 1.0 - p.y * ppp / sh as f32 * 2.0]
         };
-        let uni = CanvasUniform {
+        let uni = DisplayUniform {
             clip_min: to_clip(self.doc_rect.min),
             clip_max: to_clip(self.doc_rect.max),
             checker_px: self.checker_pts * ppp,
             _pad: [0.0; 3],
         };
-        queue.write_buffer(&renderer.uniform, 0, bytemuck::bytes_of(&uni));
+        queue.write_buffer(&gpu.display_uniform, 0, bytemuck::bytes_of(&uni));
         Vec::new()
     }
 
@@ -271,14 +627,10 @@ impl CallbackTrait for CanvasPaint {
         render_pass: &mut wgpu::RenderPass<'static>,
         resources: &CallbackResources,
     ) {
-        let renderer: &CanvasRenderer = resources.get().unwrap();
-        let Some(bind_group) = &renderer.bind_group else {
-            return;
-        };
-        render_pass.set_bind_group(0, bind_group, &[]);
-        render_pass.set_pipeline(&renderer.pipeline_checker);
-        render_pass.draw(0..6, 0..1);
-        render_pass.set_pipeline(&renderer.pipeline_image);
+        let gpu: &CanvasGpu = resources.get().unwrap();
+        let Some(bg) = &gpu.display_bind_group else { return };
+        render_pass.set_pipeline(&gpu.display_pipeline);
+        render_pass.set_bind_group(0, bg, &[]);
         render_pass.draw(0..6, 0..1);
     }
 }
