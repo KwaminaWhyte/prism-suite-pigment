@@ -190,8 +190,8 @@ pigment/
 - [~] **DoD (partial):** PSD-compatible ✓, standard-format export ✓, HDR in ✓; color-managed / AI / extensible deferred
 
 ### Cross-cutting (every phase)
-- [ ] Tests: core model unit tests, blend-math golden-image tests, doc round-trip
-- [ ] CI: fmt + clippy + test + cross-platform build matrix
+- [x] Tests: core unit (color/blend/tile/fill/raster/curve/histogram/shape), io round-trips, headless-GPU pixel assertions (compositor/wet/undo/selection/transform/adjust/mask) — 58 total
+- [x] CI: `fmt --check` + `clippy` (-D warnings, all-targets) + `test` on linux/macos/windows (`.github/workflows/ci.yml`); workspace is rustfmt-clean + clippy-clean
 - [ ] Input mapping/shortcuts config; preferences
 - [ ] Crash recovery / autosave; error surfacing
 - [ ] Benchmarks: brush latency, composite time per layer count, large-image open
