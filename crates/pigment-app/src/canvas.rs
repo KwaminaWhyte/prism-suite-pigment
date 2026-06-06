@@ -168,6 +168,12 @@ pub struct CanvasGpu {
     wet: Option<GpuLayer>,
     wet_owner: Option<LayerId>,
     wet_opacity: f32,
+
+    // Frame-level dirty tracking: skip recompositing when the document is
+    // unchanged (pan/zoom only touch the display pass). Per-tile region
+    // invalidation needs the tile model (deferred).
+    last_final_is_ping: bool,
+    composite_valid: bool,
 }
 
 impl CanvasGpu {
@@ -342,6 +348,8 @@ impl CanvasGpu {
             wet: None,
             wet_owner: None,
             wet_opacity: 1.0,
+            last_final_is_ping: true,
+            composite_valid: false,
         }
     }
 
@@ -356,6 +364,7 @@ impl CanvasGpu {
         self.pong = Some(make_target(device, size, "composite.pong"));
         self.wet = Some(make_target(device, size, "composite.wet"));
         self.wet_owner = None;
+        self.composite_valid = false;
         self.layers.clear(); // new document
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -960,6 +969,8 @@ pub struct CanvasPaint {
     pub wet_end: bool,
     pub wet_opacity: f32,
     pub paint_into_wet: bool,
+    /// Whether the document changed this frame (gates recompositing).
+    pub dirty: bool,
 }
 
 impl CallbackTrait for CanvasPaint {
@@ -994,7 +1005,16 @@ impl CallbackTrait for CanvasPaint {
         if self.wet_end {
             gpu.wet_end(device, queue, encoder);
         }
-        let final_is_ping = gpu.composite(device, queue, encoder, &self.layers);
+        // Recomposite only when the document changed; pan/zoom alone reuse the
+        // last composite (only the display pass re-runs each frame).
+        let final_is_ping = if self.dirty || !gpu.composite_valid {
+            let f = gpu.composite(device, queue, encoder, &self.layers);
+            gpu.last_final_is_ping = f;
+            gpu.composite_valid = true;
+            f
+        } else {
+            gpu.last_final_is_ping
+        };
         gpu.build_display_bind_group(device, final_is_ping);
 
         let [sw, sh] = screen_descriptor.size_in_pixels;

@@ -103,6 +103,9 @@ pub struct PigmentApp {
     wet_active: bool,
     undo_count: u32,
     redo_count: u32,
+    // Compositing dirty tracking.
+    force_composite: bool,
+    last_fingerprint: u64,
 }
 
 impl PigmentApp {
@@ -142,7 +145,22 @@ impl PigmentApp {
             wet_active: false,
             undo_count: 0,
             redo_count: 0,
+            force_composite: true,
+            last_fingerprint: 0,
         }
+    }
+
+    fn layer_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.active_id().0.hash(&mut h);
+        for l in &self.doc.layers.layers {
+            l.id.0.hash(&mut h);
+            l.visible.hash(&mut h);
+            l.blend.shader_id().hash(&mut h);
+            l.opacity.to_bits().hash(&mut h);
+        }
+        h.finish()
     }
 
     fn active_id(&self) -> LayerId {
@@ -320,6 +338,7 @@ impl PigmentApp {
             }
             gpu.upload_layer(queue, active, &f32_to_f16_bytes(&abuf));
         });
+        self.force_composite = true;
     }
 
     fn do_eyedrop(&mut self, frame: &mut eframe::Frame, seed: (u32, u32)) {
@@ -341,6 +360,10 @@ impl PigmentApp {
                 let to8 = |lin: f32| (linear_to_srgb(lin / a).clamp(0.0, 1.0) * 255.0).round() as u8;
                 self.brush_color = egui::Color32::from_rgb(to8(p[0]), to8(p[1]), to8(p[2]));
             }
+        }
+        // Sample-all eyedrop runs composite_now (touches ping/pong); recomposite.
+        if self.sample_all {
+            self.force_composite = true;
         }
     }
 }
@@ -369,6 +392,7 @@ impl eframe::App for PigmentApp {
                     gpu.upload_layer(queue, *id, bytes);
                 }
             });
+            self.force_composite = true;
         }
 
         egui::TopBottomPanel::top("menu").show_inside(root, |ui| {
@@ -686,6 +710,19 @@ impl eframe::App for PigmentApp {
 
                 let layers = self.layer_order();
 
+                // Recomposite only when content/structure changed (not on pan/zoom).
+                let fp = self.layer_fingerprint();
+                let dirty = !dabs.is_empty()
+                    || wet_begin
+                    || wet_end
+                    || begin_command
+                    || undo > 0
+                    || redo > 0
+                    || self.force_composite
+                    || fp != self.last_fingerprint;
+                self.last_fingerprint = fp;
+                self.force_composite = false;
+
                 ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                     rect,
                     CanvasPaint {
@@ -704,6 +741,7 @@ impl eframe::App for PigmentApp {
                         wet_end,
                         wet_opacity: self.brush_opacity,
                         paint_into_wet: self.wet_active,
+                        dirty,
                     },
                 ));
             });
