@@ -524,6 +524,28 @@ impl eframe::App for PigmentApp {
                             );
 
                             ui.separator();
+                            egui::CollapsingHeader::new("Layer style: Color overlay").show(
+                                ui,
+                                |ui| {
+                                    let id = self.active_id();
+                                    let mut on = self.layer_overlays.contains_key(&id);
+                                    if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                                        if on {
+                                            self.layer_overlays.insert(id, [0.8, 0.1, 0.1, 1.0]);
+                                        } else {
+                                            self.layer_overlays.remove(&id);
+                                        }
+                                        self.force_composite = true;
+                                    }
+                                    if let Some(c) = self.layer_overlays.get_mut(&id) {
+                                        if ui.color_edit_button_rgba_premultiplied(c).changed() {
+                                            self.force_composite = true;
+                                        }
+                                    }
+                                },
+                            );
+
+                            ui.separator();
                             egui::CollapsingHeader::new("Channels").show(ui, |ui| {
                                 let names = with_gpu(frame, |gpu, _, _| gpu.channel_names())
                                     .unwrap_or_default();

@@ -232,6 +232,8 @@ pub struct PigmentApp {
     layer_strokes: HashMap<LayerId, ([f32; 4], f32)>,
     /// Per-layer drop-shadow style: (straight rgba, offset px [dx,dy], blur px).
     layer_shadows: HashMap<LayerId, ([f32; 4], [f32; 2], f32)>,
+    /// Per-layer color-overlay style: straight rgba (a = strength).
+    layer_overlays: HashMap<LayerId, [f32; 4]>,
     /// Panel visibility (Window menu show/hide).
     panels: PanelVis,
 
@@ -334,6 +336,7 @@ impl PigmentApp {
             clipped_layers: HashSet::new(),
             layer_strokes: HashMap::new(),
             layer_shadows: HashMap::new(),
+            layer_overlays: HashMap::new(),
             panels: PanelVis::default(),
             edit_mask: false,
             filter_radius: 4.0,

@@ -7,6 +7,9 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Layer style: Color Overlay** (Phase 7). Recolors a layer's covered pixels
+  toward a chosen color by strength, evaluated live in the compositor. Per-layer
+  color picker; GPU pixel-tested. Completes the Stroke/Drop-Shadow/Overlay trio.
 - **Gradient Map adjustment** (Phase 7). Non-destructive — maps the backdrop's
   luminance through a two-color gradient (shadows→highlights) built into the
   per-layer LUT texture and sampled in the compositor (shader kind 12). Two color

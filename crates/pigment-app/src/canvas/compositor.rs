@@ -181,6 +181,10 @@ impl CanvasGpu {
                 p.shadow_off = l.shadow_offset;
                 p.shadow_blur = l.shadow_blur;
             }
+            if l.has_overlay {
+                p.has_overlay = 1;
+                p.overlay_color = l.overlay_color;
+            }
             if self.xform_layer == Some(l.id) {
                 p.has_xform = 1;
                 p.m = self.xform_m;

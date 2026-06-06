@@ -52,6 +52,8 @@ fn compositor_brush_wet_undo() {
         shadow_color: [0.0; 4],
         shadow_offset: [0.0; 2],
         shadow_blur: 0.0,
+        has_overlay: false,
+        overlay_color: [0.0; 4],
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
@@ -127,6 +129,8 @@ fn selection_clips_paint() {
         shadow_color: [0.0; 4],
         shadow_offset: [0.0; 2],
         shadow_blur: 0.0,
+        has_overlay: false,
+        overlay_color: [0.0; 4],
     }];
 
     // Select the left half, then paint blue over the whole canvas.
@@ -225,6 +229,8 @@ fn adjustment_invert() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
         LayerDraw {
             id: l1,
@@ -243,6 +249,8 @@ fn adjustment_invert() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -294,6 +302,8 @@ fn curves_invert_master() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
         LayerDraw {
             id: l1,
@@ -312,6 +322,8 @@ fn curves_invert_master() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -407,6 +419,8 @@ fn posterize_adjustment() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
         LayerDraw {
             id: l1,
@@ -425,6 +439,8 @@ fn posterize_adjustment() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -476,6 +492,8 @@ fn gradient_map_adjustment() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
         LayerDraw {
             id: l1,
@@ -494,6 +512,8 @@ fn gradient_map_adjustment() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -541,6 +561,8 @@ fn blend_if_hides_bright_source() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
         LayerDraw {
             id: l1,
@@ -559,6 +581,8 @@ fn blend_if_hides_bright_source() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -619,6 +643,8 @@ fn clipping_mask_gates_by_base_alpha() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
         LayerDraw {
             id: l1,
@@ -637,6 +663,8 @@ fn clipping_mask_gates_by_base_alpha() {
             shadow_color: [0.0; 4],
             shadow_offset: [0.0; 2],
             shadow_blur: 0.0,
+            has_overlay: false,
+            overlay_color: [0.0; 4],
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -713,6 +741,8 @@ fn channel_save_load_roundtrip() {
         shadow_color: [0.0; 4],
         shadow_offset: [0.0; 2],
         shadow_blur: 0.0,
+        has_overlay: false,
+        overlay_color: [0.0; 4],
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
@@ -773,6 +803,8 @@ fn layer_stroke_outlines_edge() {
         shadow_color: [0.0; 4],
         shadow_offset: [0.0; 2],
         shadow_blur: 0.0,
+        has_overlay: false,
+        overlay_color: [0.0; 4],
     }];
     let pp = gpu.composite_now(&device, &queue, &order);
     let edge = gpu.read_composite_pixel(&device, &queue, pp, 5, 8).unwrap(); // just left of square
@@ -834,6 +866,8 @@ fn layer_drop_shadow_offsets_behind() {
         shadow_color: [0.0, 0.0, 0.0, 0.8], // black, mostly opaque
         shadow_offset: [4.0 / 16.0, 4.0 / 16.0], // down-right ~4px
         shadow_blur: 2.0 / 16.0,
+        has_overlay: false,
+        overlay_color: [0.0; 4],
     }];
     let pp = gpu.composite_now(&device, &queue, &order);
     // (12,12): square shifted +4 lands here, outside the square itself.
@@ -846,6 +880,48 @@ fn layer_drop_shadow_offsets_behind() {
         "dark offset shadow present: {shadow:?}"
     );
     assert!(far[3] < 0.1, "far corner stays empty: {far:?}");
+}
+
+// Color overlay: a white layer with a full-strength red overlay composites red.
+#[test]
+fn layer_color_overlay_recolors() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping layer_color_overlay_recolors");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(8, 8);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    gpu.upload_layer(&queue, l0, &solid(8, 1.0, 1.0, 1.0, 1.0)); // white
+
+    let order = vec![LayerDraw {
+        id: l0,
+        opacity: 1.0,
+        blend: 0,
+        visible: true,
+        adjust_kind: 0,
+        adjust: [0.0; 4],
+        has_blend_if: false,
+        blend_if: [0.0, 1.0, 0.0, 1.0],
+        clipped: false,
+        has_stroke: false,
+        stroke_color: [0.0; 4],
+        stroke_width: 0.0,
+        has_shadow: false,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        shadow_blur: 0.0,
+        has_overlay: true,
+        overlay_color: [1.0, 0.0, 0.0, 1.0], // full red
+    }];
+    let pp = gpu.composite_now(&device, &queue, &order);
+    let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
+    assert!(
+        px[0] > 0.8 && px[1] < 0.2 && px[2] < 0.2,
+        "white layer recolored to red overlay: {px:?}"
+    );
 }
 
 // A layer mask (0 on the left half) hides those pixels in the composite.
@@ -885,6 +961,8 @@ fn layer_mask_hides() {
         shadow_color: [0.0; 4],
         shadow_offset: [0.0; 2],
         shadow_blur: 0.0,
+        has_overlay: false,
+        overlay_color: [0.0; 4],
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();

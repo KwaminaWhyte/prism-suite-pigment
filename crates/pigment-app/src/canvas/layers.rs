@@ -126,6 +126,9 @@ impl CanvasGpu {
             shadow_blur: 0.0,
             shadow_off: [0.0; 2],
             shadow_color: [0.0; 4],
+            has_overlay: 0,
+            _ov: [0; 3],
+            overlay_color: [0.0; 4],
         };
         queue.write_buffer(
             &self.params_buf,

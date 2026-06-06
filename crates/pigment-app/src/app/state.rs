@@ -205,6 +205,11 @@ impl PigmentApp {
                     v.to_bits().hash(&mut h);
                 }
             }
+            if let Some(c) = self.layer_overlays.get(&l.id) {
+                for v in c {
+                    v.to_bits().hash(&mut h);
+                }
+            }
         }
         h.finish()
     }
@@ -226,6 +231,7 @@ impl PigmentApp {
                 let blend_if = self.blend_if.get(&l.id).copied();
                 let stroke = self.layer_strokes.get(&l.id);
                 let shadow = self.layer_shadows.get(&l.id);
+                let overlay = self.layer_overlays.get(&l.id).copied();
                 let cw = self.doc.size.width.max(1) as f32;
                 LayerDraw {
                     id: l.id,
@@ -246,6 +252,8 @@ impl PigmentApp {
                         .map(|(_, o, _)| [o[0] / cw, o[1] / cw])
                         .unwrap_or([0.0; 2]),
                     shadow_blur: shadow.map(|(_, _, b)| *b / cw).unwrap_or(0.0),
+                    has_overlay: overlay.is_some(),
+                    overlay_color: overlay.unwrap_or([0.0; 4]),
                 }
             })
             .collect()

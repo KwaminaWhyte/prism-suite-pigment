@@ -21,6 +21,11 @@ struct Params {
     shadow_blur: f32,
     shadow_off: vec2<f32>,
     shadow_color: vec4<f32>,
+    has_overlay: u32,
+    _ova: u32,
+    _ovb: u32,
+    _ovc: u32,
+    overlay_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -244,6 +249,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         * (params.opacity * mask);
     if !in_bounds {
         s = vec4<f32>(0.0);
+    }
+
+    // Color-overlay layer style: recolor the layer's covered pixels toward the
+    // overlay color by its strength (alpha), keeping the layer's own coverage.
+    if params.has_overlay != 0u {
+        let sc0 = s.rgb / max(s.a, 1e-5);
+        let mixed = mix(sc0, params.overlay_color.rgb, params.overlay_color.a);
+        s = vec4<f32>(mixed * s.a, s.a);
     }
 
     // Outer-stroke layer style: ring of the layer's alpha outside its own edge,
