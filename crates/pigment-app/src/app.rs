@@ -48,6 +48,10 @@ pub struct PigmentApp {
     // Active stroke state.
     stroke_last: Option<egui::Vec2>,
     stroke_residual: f32,
+
+    // One-shot undo/redo requests from the menu.
+    undo_req: bool,
+    redo_req: bool,
 }
 
 impl PigmentApp {
@@ -76,6 +80,8 @@ impl PigmentApp {
             needs_fit: true,
             stroke_last: None,
             stroke_residual: 0.0,
+            undo_req: false,
+            redo_req: false,
         }
     }
 
@@ -140,6 +146,16 @@ impl eframe::App for PigmentApp {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open…").clicked() {
                         self.open_file();
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui.button("Undo").clicked() {
+                        self.undo_req = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("Redo").clicked() {
+                        self.redo_req = true;
                         ui.close_menu();
                     }
                 });
@@ -257,19 +273,41 @@ impl eframe::App for PigmentApp {
                     img * self.view.zoom,
                 );
 
+                // Undo / redo (Cmd+Z, Cmd+Shift+Z / Cmd+Y).
+                let (mut undo, mut redo) = (self.undo_req, self.redo_req);
+                self.undo_req = false;
+                self.redo_req = false;
+                ui.input(|i| {
+                    if i.modifiers.command {
+                        if i.key_pressed(egui::Key::Z) {
+                            if i.modifiers.shift {
+                                redo = true;
+                            } else {
+                                undo = true;
+                            }
+                        }
+                        if i.key_pressed(egui::Key::Y) {
+                            redo = true;
+                        }
+                    }
+                });
+
                 let mut dabs: Vec<Dab> = Vec::new();
+                let mut begin_command = false;
+                let erase = self.tool == Tool::Eraser;
                 match self.tool {
                     Tool::Move => {
                         if response.dragged() {
                             self.view.pan += response.drag_delta();
                         }
                     }
-                    Tool::Brush => {
+                    Tool::Brush | Tool::Eraser => {
                         let spacing = (self.brush_size * 0.15).max(0.75);
                         if let Some(p) = response.interact_pointer_pos() {
                             let cur = screen_to_doc(p, doc_rect, self.doc.size);
                             match self.stroke_last {
                                 None => {
+                                    begin_command = true; // snapshot before the stroke
                                     dabs.push(self.dab_at(cur));
                                     self.stroke_last = Some(cur);
                                     self.stroke_residual = 0.0;
@@ -291,7 +329,9 @@ impl eframe::App for PigmentApp {
                             }
                             ui.ctx().request_repaint();
                         }
-                        if response.drag_stopped() || (!response.dragged() && self.stroke_last.is_some() && response.interact_pointer_pos().is_none()) {
+                        if response.drag_stopped()
+                            || (self.stroke_last.is_some() && response.interact_pointer_pos().is_none())
+                        {
                             self.stroke_last = None;
                             self.stroke_residual = 0.0;
                         }
@@ -322,6 +362,10 @@ impl eframe::App for PigmentApp {
                         layers,
                         active_id: self.active_id(),
                         dabs,
+                        erase,
+                        begin_command,
+                        undo,
+                        redo,
                     },
                 ));
             });

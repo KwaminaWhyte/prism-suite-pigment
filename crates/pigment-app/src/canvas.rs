@@ -81,9 +81,30 @@ struct GpuLayer {
     view: wgpu::TextureView,
 }
 
+/// A full-layer pixel snapshot held GPU-side for one undo step.
+struct Snapshot {
+    id: LayerId,
+    tex: wgpu::Texture,
+}
+
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const MAX_LAYERS: u64 = 64;
 const PARAMS_STRIDE: u64 = 256; // min uniform dynamic-offset alignment
+const UNDO_MAX: usize = 32;
+
+/// Erase blend: dst *= (1 - dab_alpha). Removes coverage.
+const ERASE_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
 
 fn make_target(device: &wgpu::Device, size: Size, label: &str) -> GpuLayer {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -118,10 +139,15 @@ pub struct CanvasGpu {
 
     // Brush dabs.
     dab_pipeline: wgpu::RenderPipeline,
+    dab_erase_pipeline: wgpu::RenderPipeline,
     dab_bgl: wgpu::BindGroupLayout,
     dab_info_buf: wgpu::Buffer,
     dab_instances: wgpu::Buffer,
     dab_capacity: u64,
+
+    // Undo/redo: GPU-side full-layer snapshots (tile-COW diffs come with tiling).
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
 
     // Display.
     display_pipeline: wgpu::RenderPipeline,
@@ -228,6 +254,15 @@ impl CanvasGpu {
             FMT,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
+        let dab_erase_pipeline = make_render_pipeline(
+            device,
+            "dab.erase",
+            &dab_mod,
+            &[&dab_bgl],
+            std::slice::from_ref(&dab_layout),
+            FMT,
+            Some(ERASE_BLEND),
+        );
         let dab_info_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("dab.info"),
             size: std::mem::size_of::<LayerInfo>() as u64,
@@ -282,10 +317,13 @@ impl CanvasGpu {
             composite_bgl,
             params_buf,
             dab_pipeline,
+            dab_erase_pipeline,
             dab_bgl,
             dab_info_buf,
             dab_instances,
             dab_capacity,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             display_pipeline,
             display_bgl,
             display_uniform,
@@ -306,6 +344,8 @@ impl CanvasGpu {
         self.ping = Some(make_target(device, size, "composite.ping"));
         self.pong = Some(make_target(device, size, "composite.pong"));
         self.layers.clear(); // new document
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.image_gen = None;
     }
 
@@ -343,6 +383,75 @@ impl CanvasGpu {
         self.image_gen = Some(gen);
     }
 
+    /// Copy a layer's pixels into a fresh GPU texture (one undo unit).
+    fn snapshot_of(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId) -> Option<Snapshot> {
+        let layer = self.layers.get(&id)?;
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("undo.snapshot"),
+            size: wgpu::Extent3d {
+                width: self.canvas_size.width.max(1),
+                height: self.canvas_size.height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FMT,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        copy_tex(encoder, &layer.tex, &tex, self.canvas_size);
+        Some(Snapshot { id, tex })
+    }
+
+    /// Push the active layer's current pixels onto the undo stack (stroke start).
+    pub fn begin_command(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId) {
+        if let Some(snap) = self.snapshot_of(device, encoder, id) {
+            self.undo_stack.push(snap);
+            if self.undo_stack.len() > UNDO_MAX {
+                self.undo_stack.remove(0);
+            }
+            self.redo_stack.clear();
+        }
+    }
+
+    fn restore(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, from_undo: bool) {
+        let (pop, push) = if from_undo {
+            (&mut self.undo_stack, &mut self.redo_stack)
+        } else {
+            (&mut self.redo_stack, &mut self.undo_stack)
+        };
+        let Some(snap) = pop.pop() else { return };
+        // Save current state to the opposite stack, then restore the snapshot.
+        if let Some(layer) = self.layers.get(&snap.id) {
+            let cur = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("undo.cur"),
+                size: wgpu::Extent3d {
+                    width: self.canvas_size.width.max(1),
+                    height: self.canvas_size.height.max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FMT,
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            copy_tex(encoder, &layer.tex, &cur, self.canvas_size);
+            push.push(Snapshot { id: snap.id, tex: cur });
+            copy_tex(encoder, &snap.tex, &layer.tex, self.canvas_size);
+        }
+    }
+
+    pub fn undo(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        self.restore(device, encoder, true);
+    }
+
+    pub fn redo(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        self.restore(device, encoder, false);
+    }
+
     fn paint_dabs(
         &mut self,
         device: &wgpu::Device,
@@ -350,6 +459,7 @@ impl CanvasGpu {
         encoder: &mut wgpu::CommandEncoder,
         id: LayerId,
         dabs: &[Dab],
+        erase: bool,
     ) {
         if dabs.is_empty() {
             return;
@@ -396,7 +506,8 @@ impl CanvasGpu {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.dab_pipeline);
+        let pipeline = if erase { &self.dab_erase_pipeline } else { &self.dab_pipeline };
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind, &[]);
         pass.set_vertex_buffer(0, self.dab_instances.slice(..));
         pass.draw(0..6, 0..dabs.len() as u32);
@@ -511,6 +622,29 @@ fn tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
+/// GPU-side full-texture copy (same size/format).
+fn copy_tex(encoder: &mut wgpu::CommandEncoder, src: &wgpu::Texture, dst: &wgpu::Texture, size: Size) {
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: src,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: dst,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width: size.width.max(1),
+            height: size.height.max(1),
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
 /// A clear-to-transparent color attachment for `view` (helper for inline descriptors).
 fn clear_attachment(view: &wgpu::TextureView) -> wgpu::RenderPassColorAttachment<'_> {
     wgpu::RenderPassColorAttachment {
@@ -580,6 +714,11 @@ pub struct CanvasPaint {
     pub layers: Vec<LayerDraw>,
     pub active_id: LayerId,
     pub dabs: Vec<Dab>,
+    pub erase: bool,
+    /// Set on the first frame of a stroke — snapshots the layer for undo.
+    pub begin_command: bool,
+    pub undo: bool,
+    pub redo: bool,
 }
 
 impl CallbackTrait for CanvasPaint {
@@ -602,7 +741,16 @@ impl CallbackTrait for CanvasPaint {
             gpu.upload_image(queue, *bg_id, *gen, f16);
         }
 
-        gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs);
+        if self.undo {
+            gpu.undo(device, encoder);
+        }
+        if self.redo {
+            gpu.redo(device, encoder);
+        }
+        if self.begin_command {
+            gpu.begin_command(device, encoder, self.active_id);
+        }
+        gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs, self.erase);
         let final_is_ping = gpu.composite(device, queue, encoder, &self.layers);
         gpu.build_display_bind_group(device, final_is_ping);
 

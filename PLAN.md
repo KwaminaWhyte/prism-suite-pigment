@@ -133,10 +133,12 @@ pigment/
 - [x] Core unit tests (color roundtrip, blend ids, tile coords)
 - [ ] **Tile model:** sparse map + `Rgba16Float` tiles + COW (`Arc`) — currently full-canvas textures (degenerate single tile)
 - [ ] `TileCache`: GPU atlas + indirection/page table; LRU residency; RAM spill
+- [x] Eraser (destination-out dab pipeline)
+- [x] CommandStack: undo/redo (Cmd+Z / Cmd+Shift+Z + Edit menu) via GPU-side `copy_texture_to_texture` layer snapshots, depth-capped
 - [ ] Wet-layer separation (in-progress stroke buffer) + pressure (tablet via `octotablet`)
 - [ ] Dirty-tile invalidation (currently recomposite every frame)
-- [ ] Eraser, bucket fill, eyedropper; layer delete/reorder/rename
-- [ ] CommandStack: undo/redo + History panel; tile-COW pixel snapshots (readback pattern ready)
+- [ ] Bucket fill, eyedropper; layer delete/reorder/rename
+- [ ] History panel; tile-COW snapshots (replace full-layer; readback pattern ready)
 - [ ] `.pigment` doc format: serialize layer tree + tiles (lz4), load back
 - [ ] **DoD:** multi-layer painting with blend modes, undo, save/reopen
 
