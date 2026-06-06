@@ -24,6 +24,48 @@ use std::time::SystemTime;
 
 use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTransform};
 
+/// Window-menu panel visibility (the canvas is always shown).
+#[derive(Clone, Copy)]
+pub(crate) struct PanelVis {
+    pub tool_options: bool,
+    pub tools: bool,
+    pub properties: bool,
+}
+
+impl Default for PanelVis {
+    fn default() -> Self {
+        Self {
+            tool_options: true,
+            tools: true,
+            properties: true,
+        }
+    }
+}
+
+impl PanelVis {
+    fn all_shown(&self) -> bool {
+        self.tool_options && self.tools && self.properties
+    }
+    fn show_all(&mut self) {
+        *self = Self::default();
+    }
+}
+
+#[cfg(test)]
+mod panel_tests {
+    use super::PanelVis;
+
+    #[test]
+    fn default_all_shown_and_reset() {
+        let mut p = PanelVis::default();
+        assert!(p.all_shown());
+        p.tools = false;
+        assert!(!p.all_shown());
+        p.show_all();
+        assert!(p.all_shown() && p.tool_options && p.properties);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
     Move,      // pan the view (hand)
@@ -190,6 +232,8 @@ pub struct PigmentApp {
     layer_strokes: HashMap<LayerId, ([f32; 4], f32)>,
     /// Per-layer drop-shadow style: (straight rgba, offset px [dx,dy], blur px).
     layer_shadows: HashMap<LayerId, ([f32; 4], [f32; 2], f32)>,
+    /// Panel visibility (Window menu show/hide).
+    panels: PanelVis,
 
     // Filters.
     filter_radius: f32,
@@ -290,6 +334,7 @@ impl PigmentApp {
             clipped_layers: HashSet::new(),
             layer_strokes: HashMap::new(),
             layer_shadows: HashMap::new(),
+            panels: PanelVis::default(),
             edit_mask: false,
             filter_radius: 4.0,
             filter_amount: 1.0,
