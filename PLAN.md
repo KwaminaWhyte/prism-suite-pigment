@@ -10,7 +10,7 @@ gap to parity (retouching, layer power, the filter galleries, pro color/IO, AI, 
 and the reliability/UX polish that makes a tool *feel* finished). The §"Parity coverage
 matrix" tracks where we stand against the full Photoshop surface.
 
-> Companion docs: [RESEARCH.md](./RESEARCH.md) (cited findings + crate matrix), [ARCHITECTURE.md](./ARCHITECTURE.md) (module/data-flow detail as it lands), [../SUITE.md](https://github.com/KwaminaWhyte/prism-suite-prism/blob/main/SUITE.md) (four-app vision + interop).
+> Companion docs: [RESEARCH.md](./RESEARCH.md) (cited findings + crate matrix), [ARCHITECTURE.md](./ARCHITECTURE.md) (module/data-flow detail as it lands), [SUITE.md](https://github.com/KwaminaWhyte/prism-suite-prism/blob/main/SUITE.md) (four-app vision + interop).
 
 ---
 
@@ -317,7 +317,7 @@ clear license surfacing; every tool degrades gracefully when models/GPU are abse
 - [ ] **Denoise / Sharpen (AI)** (S): learned NR for high-ISO RAW
 - [ ] **Colorize** B&W (S), **Neural-style** presets (S, optional)
 - [ ] **Face-aware Liquify** (M): landmark model drives Phase-6 Liquify sliders (eyes/nose/smile/face-width)
-- [ ] **Generative Fill / Expand** (L, **optional + pluggable** — suite AI policy): prompt → fill selection / extend canvas via a provider abstraction with **two interchangeable backends — local diffusion (`candle`/ONNX) AND a user-configured cloud endpoint (bring-your-own API key)** — plus "none". **Never required for core editing**; the app is fully functional with no AI backend configured. (Policy shared across the suite — see [../RESEARCH.md §5](https://github.com/KwaminaWhyte/prism-suite-prism/blob/main/RESEARCH.md).)
+- [ ] **Generative Fill / Expand** (L, **optional + pluggable** — suite AI policy): prompt → fill selection / extend canvas via a provider abstraction with **two interchangeable backends — local diffusion (`candle`/ONNX) AND a user-configured cloud endpoint (bring-your-own API key)** — plus "none". **Never required for core editing**; the app is fully functional with no AI backend configured. (Policy shared across the suite — see [RESEARCH.md §5](https://github.com/KwaminaWhyte/prism-suite-prism/blob/main/RESEARCH.md).)
 - [ ] Provider abstraction: a `prism-ai` trait so local / cloud / none are swappable at runtime; cancellation + progress + VRAM guard; model license surfaced on first fetch
 - [ ] Tests: deterministic mask IoU vs fixtures (seeded), graceful no-model path
 
