@@ -19,6 +19,8 @@ use prism_io::resize::{resize_rgba_f32, Quality};
 use prism_io::text::{self, TextAlign};
 use prism_io::LoadedImage;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::SystemTime;
 
 use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTransform};
 
@@ -169,6 +171,11 @@ pub struct PigmentApp {
     gen_fp: HashMap<LayerId, u64>,
     shape_drag: Option<LayerId>,
     grad_start: Option<egui::Vec2>,
+
+    // Dynamic-Link: layers placed from a `.contour` file with a live link. Each
+    // frame we stat the source file; a newer mtime triggers a re-rasterize +
+    // re-upload to the SAME layer id. (path, last-seen modified time.)
+    linked_contours: HashMap<LayerId, (PathBuf, SystemTime)>,
 }
 
 /// Build the uv-space layer-from-canvas affine for a translate + uniform scale
@@ -248,6 +255,7 @@ impl PigmentApp {
             gen_fp: HashMap::new(),
             shape_drag: None,
             grad_start: None,
+            linked_contours: HashMap::new(),
         }
     }
 
@@ -831,6 +839,92 @@ impl PigmentApp {
         self.force_composite = true;
     }
 
+    /// Place a `.contour` as a *linked* raster layer (the suite's Dynamic-Link):
+    /// like `place_contour`, but we remember `LayerId -> (path, mtime)` so the
+    /// per-frame poll in `sync_linked_contours` re-rasterizes + re-uploads the
+    /// same layer whenever the source file changes on disk. The layer name gets
+    /// a "(linked)" suffix so it's distinguishable from a static place.
+    fn place_contour_linked(&mut self, frame: &mut eframe::Frame) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Contour", &["contour"])
+            .pick_file()
+        else {
+            return;
+        };
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let placed = match crate::contour_import::place(&path, w, h) {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("place .contour (linked) failed: {e}");
+                return;
+            }
+        };
+        // Record the link timestamp now; treat a stat failure as the epoch so
+        // the first successful stat next frame counts as "newer" and re-syncs.
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let id = self
+            .doc
+            .layers
+            .add_raster(format!("{} (linked)", placed.name));
+        self.doc.active_layer = Some(id);
+        let bytes = f32_to_f16_bytes(&placed.pixels);
+        with_gpu(frame, |gpu, device, queue| {
+            gpu.ensure_layer(device, id);
+            gpu.upload_layer(queue, id, &bytes);
+        });
+        self.linked_contours.insert(id, (path, mtime));
+        self.force_composite = true;
+    }
+
+    /// Per-frame Dynamic-Link poll: for every linked `.contour` layer, stat the
+    /// source file; if its mtime is newer than what we last rendered (and the
+    /// layer still exists), re-rasterize at the current document size and
+    /// re-upload to the SAME layer id. Layers removed from the document are
+    /// pruned. Stat/read errors (e.g. the file briefly vanishing mid-save) are
+    /// skipped this frame and retried next frame. Cheap: one stat per link.
+    fn sync_linked_contours(&mut self, frame: &mut eframe::Frame) {
+        if self.linked_contours.is_empty() {
+            return;
+        }
+        // Prune links whose layer no longer exists in the document.
+        let alive: HashSet<LayerId> = self.doc.layers.layers.iter().map(|l| l.id).collect();
+        self.linked_contours.retain(|id, _| alive.contains(id));
+
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        // Collect work first (we can't borrow self mutably while iterating the map).
+        let mut jobs: Vec<(LayerId, Vec<u8>, SystemTime)> = Vec::new();
+        for (id, (path, last)) in &self.linked_contours {
+            // File temporarily missing (e.g. atomic save in progress) → skip.
+            let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+                continue;
+            };
+            if mtime <= *last {
+                continue;
+            }
+            match crate::contour_import::place(path, w, h) {
+                Ok(placed) => jobs.push((*id, f32_to_f16_bytes(&placed.pixels), mtime)),
+                Err(e) => log::warn!("linked .contour re-render skipped: {e}"),
+            }
+        }
+        if jobs.is_empty() {
+            return;
+        }
+        with_gpu(frame, |gpu, device, queue| {
+            for (id, bytes, _) in &jobs {
+                gpu.ensure_layer(device, *id);
+                gpu.upload_layer(queue, *id, bytes);
+            }
+        });
+        for (id, _, mtime) in jobs {
+            if let Some(entry) = self.linked_contours.get_mut(&id) {
+                entry.1 = mtime;
+            }
+        }
+        self.force_composite = true;
+    }
+
     fn open_exr(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("OpenEXR", &["exr"])
@@ -1230,6 +1324,14 @@ impl eframe::App for PigmentApp {
             self.force_composite = true;
         }
 
+        // Dynamic-Link: poll linked `.contour` sources every frame. When a link
+        // exists, keep the UI repainting (egui idles otherwise) so the mtime
+        // poll actually runs and the layer tracks its vector source live.
+        if !self.linked_contours.is_empty() {
+            self.sync_linked_contours(frame);
+            root.ctx().request_repaint();
+        }
+
         egui::TopBottomPanel::top("menu").show_inside(root, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -1252,6 +1354,10 @@ impl eframe::App for PigmentApp {
                     ui.separator();
                     if ui.button("Place .contour…").clicked() {
                         self.place_contour(frame);
+                        ui.close_menu();
+                    }
+                    if ui.button("Place .contour (linked)…").clicked() {
+                        self.place_contour_linked(frame);
                         ui.close_menu();
                     }
                     ui.separator();
