@@ -36,9 +36,10 @@ const RADIUS: u8 = 6;
 
 /// Apply Pigment's modern dark theme to the given egui context.
 pub fn apply(ctx: &Context) {
-    let mut style = Style::default();
-
-    style.visuals = visuals();
+    let mut style = Style {
+        visuals: visuals(),
+        ..Style::default()
+    };
     tune_spacing(&mut style);
     tune_text(&mut style);
 

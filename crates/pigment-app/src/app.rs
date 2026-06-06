@@ -30,6 +30,7 @@ enum Tool {
     MoveLayer, // translate the active layer
     Brush,
     Eraser,
+    Clone, // clone stamp: Alt-click sets source, drag stamps from it
     Fill,
     Eyedropper,
     SelectRect,
@@ -130,6 +131,10 @@ pub struct PigmentApp {
     stroke_residual: f32,
     stroke_dirty: Option<(egui::Vec2, egui::Vec2)>,
     wet_active: bool,
+    /// Clone Stamp source anchor (doc px), set by Alt-click.
+    clone_source: Option<egui::Vec2>,
+    /// destAnchor − sourceAnchor for the active clone stroke (doc px).
+    clone_offset: [f32; 2],
     undo_count: u32,
     redo_count: u32,
     // Compositing dirty tracking.
@@ -228,6 +233,8 @@ impl PigmentApp {
             stroke_residual: 0.0,
             stroke_dirty: None,
             wet_active: false,
+            clone_source: None,
+            clone_offset: [0.0; 2],
             undo_count: 0,
             redo_count: 0,
             force_composite: true,
@@ -976,8 +983,8 @@ impl PigmentApp {
         let mut bytes = Vec::with_capacity(rgba.len() * 2);
         for px in rgba.chunks_exact(4) {
             let a = px[3];
-            for c in 0..3 {
-                bytes.extend_from_slice(&f16::from_f32(px[c] * a).to_le_bytes());
+            for &ch in px.iter().take(3) {
+                bytes.extend_from_slice(&f16::from_f32(ch * a).to_le_bytes());
             }
             bytes.extend_from_slice(&f16::from_f32(a).to_le_bytes());
         }
@@ -1626,12 +1633,12 @@ impl eframe::App for PigmentApp {
                 ui.menu_button("Select", |ui| {
                     if ui.button("All").clicked() {
                         self.sel_op_pending = Some(SelectionOp::All);
-                        self.selection_active = false;
+                        self.selection_active = true; // show marching ants on whole canvas
                         ui.close_menu();
                     }
                     if ui.button("None").clicked() {
                         self.sel_op_pending = Some(SelectionOp::None);
-                        self.selection_active = true;
+                        self.selection_active = false; // deselect: hide marching ants
                         ui.close_menu();
                     }
                     if ui.button("Invert").clicked() {
@@ -1682,6 +1689,11 @@ impl eframe::App for PigmentApp {
                     (Tool::MoveLayer, icons::MOVE, "Move layer"),
                     (Tool::Brush, icons::BRUSH, "Brush"),
                     (Tool::Eraser, icons::ERASER, "Eraser"),
+                    (
+                        Tool::Clone,
+                        icons::CLONE,
+                        "Clone stamp (Alt-click sets source)",
+                    ),
                     (Tool::Fill, icons::FILL, "Bucket fill"),
                     (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
                     (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
@@ -2253,6 +2265,60 @@ impl eframe::App for PigmentApp {
                             self.stroke_residual = 0.0;
                         }
                     }
+                    Tool::Clone => {
+                        let alt = ui.input(|i| i.modifiers.alt);
+                        let spacing = (self.brush_size * 0.15).max(0.75);
+                        if let Some(p) = response.interact_pointer_pos() {
+                            let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                            if alt {
+                                // Alt-click sets the clone source anchor; no paint.
+                                if response.drag_started() || response.clicked() {
+                                    self.clone_source = Some(cur);
+                                }
+                            } else if let Some(src) = self.clone_source {
+                                match self.stroke_last {
+                                    None => {
+                                        // Aligned: lock the offset at the first dab.
+                                        self.clone_offset = [cur.x - src.x, cur.y - src.y];
+                                        begin_command = true;
+                                        self.stroke_dirty = None;
+                                        self.expand_dirty(cur, dirty_radius);
+                                        dabs.push(self.dab_at(cur, self.brush_opacity, 1.0));
+                                        self.stroke_last = Some(cur);
+                                        self.stroke_residual = 0.0;
+                                    }
+                                    Some(last) => {
+                                        let seg = cur - last;
+                                        let dist = seg.length();
+                                        if dist > 1e-3 {
+                                            let dir = seg / dist;
+                                            let mut t = self.stroke_residual;
+                                            while t <= dist {
+                                                dabs.push(self.dab_at(
+                                                    last + dir * t,
+                                                    self.brush_opacity,
+                                                    1.0,
+                                                ));
+                                                t += spacing;
+                                            }
+                                            self.stroke_residual = t - dist;
+                                            self.stroke_last = Some(cur);
+                                            self.expand_dirty(cur, dirty_radius);
+                                        }
+                                    }
+                                }
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                        if response.drag_stopped()
+                            || (self.stroke_last.is_some()
+                                && response.interact_pointer_pos().is_none())
+                        {
+                            commit_command = true;
+                            self.stroke_last = None;
+                            self.stroke_residual = 0.0;
+                        }
+                    }
                     Tool::Fill => {
                         if response.clicked() {
                             if let Some(p) = response.interact_pointer_pos() {
@@ -2391,6 +2457,7 @@ impl eframe::App for PigmentApp {
                     Tool::Eraser => "Erase",
                     Tool::MoveLayer => "Move",
                     Tool::Transform => "Transform",
+                    Tool::Clone => "Clone Stamp",
                     _ => "Brush",
                 };
                 let xform = if self.xform_active {
@@ -2437,6 +2504,8 @@ impl eframe::App for PigmentApp {
                         wet_opacity: self.brush_opacity,
                         paint_into_wet: self.wet_active,
                         paint_mask,
+                        clone: self.tool == Tool::Clone,
+                        clone_offset: self.clone_offset,
                         dirty,
                         selection_op: self.sel_op_pending.take(),
                         time,
@@ -2444,6 +2513,29 @@ impl eframe::App for PigmentApp {
                         bake,
                     },
                 ));
+
+                // Clone-stamp source marker (crosshair at the sampled point).
+                if self.tool == Tool::Clone {
+                    if let Some(src) = self.clone_source {
+                        let sp = egui::pos2(
+                            doc_rect.min.x
+                                + src.x / self.doc.size.width.max(1) as f32 * doc_rect.width(),
+                            doc_rect.min.y
+                                + src.y / self.doc.size.height.max(1) as f32 * doc_rect.height(),
+                        );
+                        let col = egui::Color32::from_rgb(80, 200, 255);
+                        let painter = ui.painter();
+                        painter.circle_stroke(sp, 6.0, egui::Stroke::new(1.5, col));
+                        painter.line_segment(
+                            [sp - egui::vec2(9.0, 0.0), sp + egui::vec2(9.0, 0.0)],
+                            egui::Stroke::new(1.0, col),
+                        );
+                        painter.line_segment(
+                            [sp - egui::vec2(0.0, 9.0), sp + egui::vec2(0.0, 9.0)],
+                            egui::Stroke::new(1.0, col),
+                        );
+                    }
+                }
             });
     }
 }

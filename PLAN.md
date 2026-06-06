@@ -257,7 +257,7 @@ Each phase is a coherent, shippable slice. Effort tags: **S** ≤1wk-equiv, **M*
 ### Phase 6 — Retouching, healing & Liquify  *(the photo-repair core)*
 The single biggest "feels like Photoshop" gap. All operate on the active raster layer (or a
 sampled-merged source), undoable via region-COW, selection-clipped.
-- [ ] **Clone Stamp** (M): offset source point; aligned/non-aligned; sample current / all-layers / below; soft brush, opacity/flow, rotation
+- [x] **Clone Stamp** (Alt-click source → aligned offset; frozen pre-stroke snapshot sampled in a GPU clone-dab pass; soft brush + opacity; selection-clipped; on-canvas source crosshair; GPU-pixel-tested). *Still: non-aligned mode, sample all-layers/below, flow vs opacity, rotation.*
 - [ ] **Healing Brush** (L, shared math): clone *gradients* not pixels — Poisson/gradient-domain blend so texture transplants but tone matches the destination
 - [ ] **Spot Healing** (M): auto-source from surrounding ring (proximity match) → Poisson blend; content-aware mode falls through to PatchMatch fill
 - [ ] **Patch tool** (M): lasso a region, drag onto a source area, seamless-blend (Poisson) the result

@@ -49,6 +49,8 @@ pub const PAN: &str = ph::HAND;
 pub const BRUSH: &str = ph::PAINT_BRUSH;
 /// Eraser tool.
 pub const ERASER: &str = ph::ERASER;
+/// Clone-stamp tool.
+pub const CLONE: &str = ph::STAMP;
 /// Fill / paint-bucket tool.
 pub const FILL: &str = ph::PAINT_BUCKET;
 /// Eyedropper / color-pick tool.

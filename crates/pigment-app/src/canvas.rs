@@ -141,6 +141,14 @@ struct LayerInfo {
     _pad: f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CloneParams {
+    /// destAnchor − sourceAnchor in document px (aligned Clone Stamp).
+    offset: [f32; 2],
+    _pad: [f32; 2],
+}
+
 struct GpuLayer {
     tex: wgpu::Texture,
     view: wgpu::TextureView,
@@ -255,6 +263,13 @@ pub struct CanvasGpu {
     dab_info_buf: wgpu::Buffer,
     dab_instances: wgpu::Buffer,
     dab_capacity: u64,
+
+    // Clone Stamp: a clone dab pass samples a frozen source snapshot.
+    clone_pipeline: wgpu::RenderPipeline,
+    clone_bgl: wgpu::BindGroupLayout,
+    clone_params_buf: wgpu::Buffer,
+    /// Pre-stroke source snapshot for the active clone stroke (sampleable).
+    clone_src: Option<GpuLayer>,
 
     // Undo/redo: region snapshots. A stroke copies its layer to `stroke_pre` at
     // start, then on commit extracts only the dirty sub-rect into the stack.
@@ -442,6 +457,56 @@ impl CanvasGpu {
             mapped_at_creation: false,
         });
 
+        // --- Clone-stamp pipeline (samples a frozen source + offset) ---
+        let clone_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("clone.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/clone.wgsl").into()),
+        });
+        let clone_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("clone.bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                sampler_entry(1),
+                tex_entry(2),
+                tex_entry(3),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let clone_pipeline = make_render_pipeline(
+            device,
+            "clone",
+            &clone_mod,
+            "fs_main",
+            &[&clone_bgl],
+            std::slice::from_ref(&dab_layout),
+            FMT,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        );
+        let clone_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("clone.params"),
+            size: std::mem::size_of::<CloneParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // --- Display pipeline ---
         let display_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("display.bgl"),
@@ -576,6 +641,10 @@ impl CanvasGpu {
             dab_bgl,
             dab_info_buf,
             dab_instances,
+            clone_pipeline,
+            clone_bgl,
+            clone_params_buf,
+            clone_src: None,
             dab_capacity,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -924,6 +993,7 @@ impl CanvasGpu {
         self.stroke_pre = None;
         self.layers.clear(); // new document
         self.curve_luts.clear();
+        self.clone_src = None;
         self.masks.clear();
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -964,6 +1034,7 @@ impl CanvasGpu {
 
     /// Build + upload a Curves layer's tone-curve LUT from per-channel control
     /// points. `rgb` is the composite (master) curve; `r`/`g`/`b` are per-channel.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_curve_lut(
         &mut self,
         device: &wgpu::Device,
@@ -1473,6 +1544,9 @@ impl CanvasGpu {
         match *op {
             SelectionOp::All => self.has_selection = false,
             SelectionOp::None => {
+                // Clear the selection texture so it's in a clean state for
+                // the next selection op, then remove the mask constraint so
+                // painting is unrestricted (matches Photoshop "Select > None").
                 if let Some(sel) = self.selection.as_ref() {
                     let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("sel.none"),
@@ -1491,7 +1565,7 @@ impl CanvasGpu {
                         multiview_mask: None,
                     });
                 }
-                self.has_selection = true;
+                self.has_selection = false; // was true — bug: empty mask blocked all painting
             }
             SelectionOp::Marquee { rect, ellipse } => {
                 let Some(sel) = self.selection.as_ref() else {
@@ -1772,6 +1846,122 @@ impl CanvasGpu {
             &self.dab_pipeline
         };
         pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.set_vertex_buffer(0, self.dab_instances.slice(..));
+        pass.draw(0..6, 0..dabs.len() as u32);
+    }
+
+    /// Freeze the active layer into the clone source so a clone stroke samples a
+    /// stable snapshot (no feedback). Called at clone-stroke begin.
+    pub fn snapshot_clone_source(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        id: LayerId,
+    ) {
+        let src = make_target(device, self.canvas_size, "clone.src");
+        {
+            let Some(layer) = self.layers.get(&id) else {
+                return;
+            };
+            copy_tex(encoder, &layer.tex, &src.tex, self.canvas_size);
+        }
+        self.clone_src = Some(src);
+    }
+
+    /// Clone-stamp dabs: copy pixels from the frozen source at `offset`
+    /// (destAnchor − sourceAnchor) into the active layer, shaped by brush falloff.
+    fn paint_clone_dabs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        id: LayerId,
+        dabs: &[Dab],
+        offset: [f32; 2],
+    ) {
+        if dabs.is_empty() {
+            return;
+        }
+        if !self.layers.contains_key(&id) || self.clone_src.is_none() || self.selection.is_none() {
+            return;
+        }
+        if dabs.len() as u64 > self.dab_capacity {
+            self.dab_capacity = (dabs.len() as u64).next_power_of_two();
+            self.dab_instances = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("dab.instances"),
+                size: self.dab_capacity * std::mem::size_of::<Dab>() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        queue.write_buffer(&self.dab_instances, 0, bytemuck::cast_slice(dabs));
+        queue.write_buffer(
+            &self.dab_info_buf,
+            0,
+            bytemuck::bytes_of(&LayerInfo {
+                size: [
+                    self.canvas_size.width as f32,
+                    self.canvas_size.height as f32,
+                ],
+                has_selection: if self.has_selection { 1.0 } else { 0.0 },
+                _pad: 0.0,
+            }),
+        );
+        queue.write_buffer(
+            &self.clone_params_buf,
+            0,
+            bytemuck::bytes_of(&CloneParams {
+                offset,
+                _pad: [0.0; 2],
+            }),
+        );
+        let target = self.layers.get(&id).unwrap();
+        let src = self.clone_src.as_ref().unwrap();
+        let sel = self.selection.as_ref().unwrap();
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("clone.bg"),
+            layout: &self.clone_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.dab_info_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&sel.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&src.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.clone_params_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clone.pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.clone_pipeline);
         pass.set_bind_group(0, &bind, &[]);
         pass.set_vertex_buffer(0, self.dab_instances.slice(..));
         pass.draw(0..6, 0..dabs.len() as u32);
@@ -2130,6 +2320,11 @@ pub struct CanvasPaint {
     pub paint_into_wet: bool,
     /// Route brush dabs to the active layer's mask instead of its pixels.
     pub paint_mask: bool,
+    /// Clone Stamp: dabs copy from the frozen source at `clone_offset` instead
+    /// of painting a flat color.
+    pub clone: bool,
+    /// destAnchor − sourceAnchor in document px (aligned clone).
+    pub clone_offset: [f32; 2],
     /// Whether the document changed this frame (gates recompositing).
     pub dirty: bool,
     /// Selection operation to apply this frame, if any.
@@ -2173,20 +2368,34 @@ impl CallbackTrait for CanvasPaint {
         }
         if self.begin_command {
             gpu.begin_command(device, encoder, self.active_id, &self.command_label);
+            if self.clone {
+                gpu.snapshot_clone_source(device, encoder, self.active_id);
+            }
         }
         if self.wet_begin {
             gpu.wet_begin(encoder, self.active_id, self.wet_opacity);
         }
-        gpu.paint_dabs(
-            device,
-            queue,
-            encoder,
-            self.active_id,
-            &self.dabs,
-            self.erase,
-            self.paint_into_wet,
-            self.paint_mask,
-        );
+        if self.clone {
+            gpu.paint_clone_dabs(
+                device,
+                queue,
+                encoder,
+                self.active_id,
+                &self.dabs,
+                self.clone_offset,
+            );
+        } else {
+            gpu.paint_dabs(
+                device,
+                queue,
+                encoder,
+                self.active_id,
+                &self.dabs,
+                self.erase,
+                self.paint_into_wet,
+                self.paint_mask,
+            );
+        }
         if self.wet_end {
             gpu.wet_end(device, queue, encoder);
         }
@@ -2509,6 +2718,55 @@ mod gpu_tests {
         assert!(
             px[0] < 0.2 && px[1] > 0.8 && px[2] > 0.8,
             "curves invert red -> cyan: {px:?}"
+        );
+    }
+
+    // Clone stamp: source = left-half green / right-half red. Stamping the right
+    // half with offset +4px samples the green left half, so the dab paints green.
+    #[test]
+    fn clone_stamp_copies_source() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping clone_stamp_copies_source");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size); // selection exists, has_selection = false
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+
+        // Left half (x<4) green, right half red — premultiplied f16.
+        let mut buf = Vec::new();
+        for _y in 0..8 {
+            for x in 0..8 {
+                let px = if x < 4 {
+                    [0.0, 1.0, 0.0, 1.0]
+                } else {
+                    [1.0, 0.0, 0.0, 1.0]
+                };
+                for &c in &px {
+                    buf.extend_from_slice(&half::f16::from_f32(c).to_le_bytes());
+                }
+            }
+        }
+        gpu.upload_layer(&queue, l0, &buf);
+
+        // Stamp the right half sampling 4px to the left (green source).
+        let dab = Dab {
+            center: [6.0, 4.0],
+            radius: 2.0,
+            hardness: 0.99,
+            color: [0.0, 0.0, 0.0, 1.0],
+        };
+        let mut enc = device.create_command_encoder(&Default::default());
+        gpu.snapshot_clone_source(&device, &mut enc, l0);
+        gpu.paint_clone_dabs(&device, &queue, &mut enc, l0, &[dab], [4.0, 0.0]);
+        queue.submit([enc.finish()]);
+
+        let px = gpu.read_pixel(&device, &queue, l0, 6, 4).unwrap();
+        assert!(
+            px[1] > 0.8 && px[0] < 0.2,
+            "clone stamped green over red: {px:?}"
         );
     }
 
