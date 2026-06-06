@@ -124,6 +124,22 @@ pub struct PigmentApp {
     sel_mode: CombineMode,     // current modifier-derived combine mode
     lasso_points: Vec<egui::Vec2>, // in-progress lasso (document px)
     feather_radius: f32,
+
+    // Move/transform of the active layer.
+    xform_active: bool,
+    xform_translate: egui::Vec2, // document px
+    xform_scale: f32,
+}
+
+/// Build the uv-space layer-from-canvas affine for a translate + uniform scale
+/// about the canvas center. Returns (2x2 matrix [a,b,c,d], offset).
+fn compute_xform(translate: egui::Vec2, scale: f32, size: Size) -> ([f32; 4], [f32; 2]) {
+    let inv = 1.0 / scale.max(1e-3);
+    let tx = translate.x / size.width as f32;
+    let ty = translate.y / size.height as f32;
+    let m = [inv, 0.0, 0.0, inv];
+    let off = [0.5 - (0.5 + tx) * inv, 0.5 - (0.5 + ty) * inv];
+    (m, off)
 }
 
 impl PigmentApp {
@@ -176,6 +192,9 @@ impl PigmentApp {
             sel_mode: CombineMode::Replace,
             lasso_points: Vec::new(),
             feather_radius: 2.0,
+            xform_active: false,
+            xform_translate: egui::Vec2::ZERO,
+            xform_scale: 1.0,
         }
     }
 
@@ -669,6 +688,15 @@ impl eframe::App for PigmentApp {
             if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
                 ui.checkbox(&mut self.sample_all, "sample all layers");
             }
+            if matches!(self.tool, Tool::MoveLayer | Tool::Transform) {
+                ui.label("Drag to move the active layer.");
+                if self.tool == Tool::Transform {
+                    ui.label("Shift+drag to scale.");
+                }
+            }
+            if matches!(self.tool, Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand) {
+                ui.label("Shift: add · Alt: subtract.");
+            }
 
             ui.separator();
             let (undos, redos) = with_gpu(frame, |gpu, _, _| gpu.history_labels()).unwrap_or_default();
@@ -835,6 +863,7 @@ impl eframe::App for PigmentApp {
                 let mut commit_command = false;
                 let mut wet_begin = false;
                 let mut wet_end = false;
+                let mut bake = false;
                 let erase = self.tool == Tool::Eraser;
                 let dirty_radius = self.brush_size * 0.5 + 1.0; // max dab extent
                 // Brush paints full-coverage dabs into the wet layer (opacity is
@@ -846,8 +875,33 @@ impl eframe::App for PigmentApp {
                             self.view.pan += response.drag_delta();
                         }
                     }
+                    Tool::MoveLayer | Tool::Transform => {
+                        let allow_scale = self.tool == Tool::Transform;
+                        if response.drag_started() {
+                            self.xform_active = true;
+                            self.xform_translate = egui::Vec2::ZERO;
+                            self.xform_scale = 1.0;
+                            begin_command = true;
+                        }
+                        if response.dragged() {
+                            if allow_scale && ui.input(|i| i.modifiers.shift) {
+                                self.xform_scale = (self.xform_scale
+                                    * (1.0 - response.drag_delta().y * 0.005))
+                                    .clamp(0.05, 20.0);
+                            } else {
+                                self.xform_translate +=
+                                    response.drag_delta() / self.view.zoom.max(1e-3);
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped() && self.xform_active {
+                            bake = true;
+                            commit_command = true;
+                            self.xform_active = false;
+                        }
+                    }
                     // Implemented in a later Phase 2 wave.
-                    Tool::MoveLayer | Tool::Transform | Tool::Crop => {}
+                    Tool::Crop => {}
                     Tool::Brush | Tool::Eraser => {
                         let spacing = (self.brush_size * 0.15).max(0.75);
                         let dt = ui.input(|i| i.stable_dt).max(1e-3);
@@ -1016,11 +1070,24 @@ impl eframe::App for PigmentApp {
                 let dirty = !dabs.is_empty()
                     || wet_begin
                     || wet_end
+                    || bake
+                    || self.xform_active
                     || begin_command
                     || undo > 0
                     || redo > 0
                     || self.force_composite
                     || fp != self.last_fingerprint;
+                let command_label = match self.tool {
+                    Tool::Eraser => "Erase",
+                    Tool::MoveLayer => "Move",
+                    Tool::Transform => "Transform",
+                    _ => "Brush",
+                };
+                let xform = if self.xform_active {
+                    Some(compute_xform(self.xform_translate, self.xform_scale, self.doc.size))
+                } else {
+                    None
+                };
                 self.last_fingerprint = fp;
                 self.force_composite = false;
 
@@ -1041,7 +1108,7 @@ impl eframe::App for PigmentApp {
                         dabs,
                         erase,
                         begin_command,
-                        command_label: if erase { "Erase".into() } else { "Brush".into() },
+                        command_label: command_label.into(),
                         commit_command,
                         dirty_rect: self.dirty_rect(),
                         undo,
@@ -1053,6 +1120,8 @@ impl eframe::App for PigmentApp {
                         dirty,
                         selection_op: self.sel_op_pending.take(),
                         time,
+                        xform,
+                        bake,
                     },
                 ));
             });

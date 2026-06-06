@@ -88,7 +88,17 @@ struct ShapeUniform {
 struct CompositeParams {
     opacity: f32,
     blend_mode: u32,
-    _pad: [u32; 2],
+    has_xform: u32,
+    _p0: u32,
+    m: [f32; 4],
+    off: [f32; 2],
+    _p1: [f32; 2],
+}
+
+impl CompositeParams {
+    fn plain(opacity: f32, blend_mode: u32) -> Self {
+        Self { opacity, blend_mode, has_xform: 0, _p0: 0, m: [1.0, 0.0, 0.0, 1.0], off: [0.0; 2], _p1: [0.0; 2] }
+    }
 }
 
 #[repr(C)]
@@ -220,6 +230,11 @@ pub struct CanvasGpu {
     shape_uniform: wgpu::Buffer,
     invert_pipeline: wgpu::RenderPipeline,
     invert_bgl: wgpu::BindGroupLayout,
+
+    // Live move/transform of the active layer (uv-space layer-from-canvas affine).
+    xform_layer: Option<LayerId>,
+    xform_m: [f32; 4],
+    xform_off: [f32; 2],
 }
 
 impl CanvasGpu {
@@ -465,7 +480,83 @@ impl CanvasGpu {
             shape_uniform,
             invert_pipeline,
             invert_bgl,
+            xform_layer: None,
+            xform_m: [1.0, 0.0, 0.0, 1.0],
+            xform_off: [0.0; 2],
         }
+    }
+
+    /// Set the live affine on a layer (uv-space layer-from-canvas matrix + offset).
+    pub fn set_layer_transform(&mut self, layer: Option<LayerId>, m: [f32; 4], off: [f32; 2]) {
+        self.xform_layer = layer;
+        self.xform_m = m;
+        self.xform_off = off;
+    }
+
+    /// Bake the active transform into its layer's pixels, then clear it.
+    pub fn bake_transform(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        let Some(id) = self.xform_layer else { return };
+        let (Some(layer), Some(ping), Some(pong)) =
+            (self.layers.get(&id), self.ping.as_ref(), self.pong.as_ref())
+        else {
+            return;
+        };
+        // Bake params live in the wet slot to avoid clashing with composite's slots.
+        let p = CompositeParams {
+            opacity: 1.0,
+            blend_mode: 0,
+            has_xform: 1,
+            _p0: 0,
+            m: self.xform_m,
+            off: self.xform_off,
+            _p1: [0.0; 2],
+        };
+        queue.write_buffer(&self.params_buf, WET_PARAMS_OFFSET as u64, bytemuck::bytes_of(&p));
+        // Clear ping (transparent backdrop).
+        {
+            let _c = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("xform.clear"),
+                color_attachments: &[Some(clear_attachment(&ping.view))],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("xform.bake.bg"),
+            layout: &self.composite_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&ping.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&layer.view) },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.params_buf,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<CompositeParams>() as u64),
+                    }),
+                },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("xform.bake"),
+                color_attachments: &[Some(clear_attachment(&pong.view))],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.composite_pipeline);
+            pass.set_bind_group(0, &bind, &[WET_PARAMS_OFFSET]);
+            pass.draw(0..3, 0..1);
+        }
+        copy_tex(encoder, &pong.tex, &layer.tex, self.canvas_size);
+        self.xform_layer = None;
+        self.xform_m = [1.0, 0.0, 0.0, 1.0];
+        self.xform_off = [0.0; 2];
     }
 
     /// (Re)create the canvas targets when the document size changes. Clears
@@ -482,6 +573,7 @@ impl CanvasGpu {
         self.selection = Some(make_target_fmt(device, size, "selection", SEL_FMT));
         self.selection_tmp = Some(make_target_fmt(device, size, "selection.tmp", SEL_FMT));
         self.has_selection = false;
+        self.xform_layer = None;
         self.composite_valid = false;
         self.stroke_owner = None;
         self.stroke_pre = None;
@@ -952,7 +1044,7 @@ impl CanvasGpu {
         queue.write_buffer(
             &self.params_buf,
             WET_PARAMS_OFFSET as u64,
-            bytemuck::bytes_of(&CompositeParams { opacity: self.wet_opacity, blend_mode: 0, _pad: [0; 2] }),
+            bytemuck::bytes_of(&CompositeParams::plain(self.wet_opacity, 0)),
         );
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("wet.flatten.bg"),
@@ -1072,12 +1164,20 @@ impl CanvasGpu {
         // Write all layer params up front (one buffer, dynamic offsets).
         let visible: Vec<&LayerDraw> = order.iter().filter(|l| l.visible).collect();
         for (i, l) in visible.iter().enumerate() {
-            let p = CompositeParams { opacity: l.opacity, blend_mode: l.blend, _pad: [0; 2] };
+            let mut p = CompositeParams::plain(l.opacity, l.blend);
+            if self.xform_layer == Some(l.id) {
+                p.has_xform = 1;
+                p.m = self.xform_m;
+                p.off = self.xform_off;
+            }
             queue.write_buffer(&self.params_buf, i as u64 * PARAMS_STRIDE, bytemuck::bytes_of(&p));
         }
         if self.wet_owner.is_some() {
-            let p = CompositeParams { opacity: self.wet_opacity, blend_mode: 0, _pad: [0; 2] };
-            queue.write_buffer(&self.params_buf, WET_PARAMS_OFFSET as u64, bytemuck::bytes_of(&p));
+            queue.write_buffer(
+                &self.params_buf,
+                WET_PARAMS_OFFSET as u64,
+                bytemuck::bytes_of(&CompositeParams::plain(self.wet_opacity, 0)),
+            );
         }
 
         let ping = self.ping.as_ref().unwrap();
@@ -1326,6 +1426,10 @@ pub struct CanvasPaint {
     pub selection_op: Option<SelectionOp>,
     /// Seconds, for marching-ants animation.
     pub time: f32,
+    /// Live affine on the active layer (uv-space matrix, offset), if transforming.
+    pub xform: Option<([f32; 4], [f32; 2])>,
+    /// Bake the active transform into the layer this frame.
+    pub bake: bool,
 }
 
 impl CallbackTrait for CanvasPaint {
@@ -1342,6 +1446,10 @@ impl CallbackTrait for CanvasPaint {
         gpu.ensure_canvas(device, self.canvas_size);
         for l in &self.layers {
             gpu.ensure_layer(device, l.id);
+        }
+        match self.xform {
+            Some((m, off)) => gpu.set_layer_transform(Some(self.active_id), m, off),
+            None => gpu.set_layer_transform(None, [1.0, 0.0, 0.0, 1.0], [0.0; 2]),
         }
 
         for _ in 0..self.undo {
@@ -1362,6 +1470,9 @@ impl CallbackTrait for CanvasPaint {
         gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs, self.erase, self.paint_into_wet);
         if self.wet_end {
             gpu.wet_end(device, queue, encoder);
+        }
+        if self.bake {
+            gpu.bake_transform(device, queue, encoder);
         }
         if self.commit_command {
             gpu.commit_command(device, encoder, self.dirty_rect);
@@ -1513,5 +1624,32 @@ mod gpu_tests {
         let outside = gpu.read_composite_pixel(&device, &queue, p, 6, 4).unwrap();
         assert!(inside[2] > 0.5, "selected area painted blue: {inside:?}");
         assert!(outside[0] > 0.5 && outside[2] < 0.2, "unselected area untouched red: {outside:?}");
+    }
+
+    // Translating a layer by +half-width then baking should clear the left half
+    // and keep the right half.
+    #[test]
+    fn transform_bake_translates() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping transform_bake_translates");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+        gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red everywhere
+
+        // Move right by half width: layer-from-canvas off.x = -0.5.
+        gpu.set_layer_transform(Some(l0), [1.0, 0.0, 0.0, 1.0], [-0.5, 0.0]);
+        let mut enc = device.create_command_encoder(&Default::default());
+        gpu.bake_transform(&device, &queue, &mut enc);
+        queue.submit([enc.finish()]);
+
+        let left = gpu.read_pixel(&device, &queue, l0, 1, 4).unwrap();
+        let right = gpu.read_pixel(&device, &queue, l0, 6, 4).unwrap();
+        assert!(left[3] < 0.1, "left half cleared after move: {left:?}");
+        assert!(right[0] > 0.9 && right[3] > 0.9, "right half keeps red: {right:?}");
     }
 }
