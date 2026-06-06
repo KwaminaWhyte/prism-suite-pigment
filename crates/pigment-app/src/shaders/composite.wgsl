@@ -17,6 +17,7 @@ struct Params {
 @group(0) @binding(1) var backdrop: texture_2d<f32>;
 @group(0) @binding(2) var layer_tex: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> params: Params;
+@group(0) @binding(4) var mask_tex: texture_2d<f32>; // R = layer mask (1x1 white if none)
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -180,7 +181,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         luv = mm * in.uv + params.off;
     }
     let in_bounds = luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0;
-    var s = textureSample(layer_tex, samp, clamp(luv, vec2<f32>(0.0), vec2<f32>(1.0))) * params.opacity;
+    let mask = textureSample(mask_tex, samp, in.uv).r; // mask is in canvas space
+    var s = textureSample(layer_tex, samp, clamp(luv, vec2<f32>(0.0), vec2<f32>(1.0)))
+        * (params.opacity * mask);
     if !in_bounds {
         s = vec4<f32>(0.0);
     }

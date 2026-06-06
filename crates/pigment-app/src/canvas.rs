@@ -248,6 +248,11 @@ pub struct CanvasGpu {
     xform_layer: Option<LayerId>,
     xform_m: [f32; 4],
     xform_off: [f32; 2],
+
+    // Per-layer masks (Rgba16Float; .r multiplies layer alpha). 1x1 white fallback.
+    masks: HashMap<LayerId, GpuLayer>,
+    white_mask: GpuLayer,
+    white_written: bool,
 }
 
 impl CanvasGpu {
@@ -292,6 +297,7 @@ impl CanvasGpu {
                     },
                     count: None,
                 },
+                tex_entry(4),
             ],
         });
         let composite_pipeline = make_render_pipeline(
@@ -496,7 +502,67 @@ impl CanvasGpu {
             xform_layer: None,
             xform_m: [1.0, 0.0, 0.0, 1.0],
             xform_off: [0.0; 2],
+            masks: HashMap::new(),
+            white_mask: make_target_fmt(device, Size::new(1, 1), "white.mask", FMT),
+            white_written: false,
         }
+    }
+
+    fn mask_view(&self, id: LayerId) -> &wgpu::TextureView {
+        self.masks.get(&id).map(|m| &m.view).unwrap_or(&self.white_mask.view)
+    }
+
+    /// Initialize the 1x1 white mask fallback (used by maskless layers).
+    fn ensure_white(&mut self, queue: &wgpu::Queue) {
+        if self.white_written {
+            return;
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.white_mask.tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[half::f16::from_f32(1.0).to_le_bytes(); 4].concat(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        self.white_written = true;
+    }
+
+    pub fn has_mask(&self, id: LayerId) -> bool {
+        self.masks.contains_key(&id)
+    }
+
+    /// Add/replace a layer mask from per-pixel values (1 = reveal). `None` => white.
+    pub fn set_mask(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId, values: Option<&[f32]>) {
+        let (w, h) = (self.canvas_size.width, self.canvas_size.height);
+        let m = make_target_fmt(device, self.canvas_size, "layer.mask", FMT);
+        let n = (w * h) as usize;
+        let mut bytes = Vec::with_capacity(n * 8);
+        for i in 0..n {
+            let v = values.map_or(1.0, |s| s.get(i).copied().unwrap_or(0.0));
+            for _ in 0..4 {
+                bytes.extend_from_slice(&half::f16::from_f32(v).to_le_bytes());
+            }
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &m.tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 8), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.masks.insert(id, m);
+    }
+
+    pub fn delete_mask(&mut self, id: LayerId) {
+        self.masks.remove(&id);
     }
 
     /// Set the live affine on a layer (uv-space layer-from-canvas matrix + offset).
@@ -508,6 +574,7 @@ impl CanvasGpu {
 
     /// Bake the active transform into its layer's pixels, then clear it.
     pub fn bake_transform(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        self.ensure_white(queue);
         let Some(id) = self.xform_layer else { return };
         let (Some(layer), Some(ping), Some(pong)) =
             (self.layers.get(&id), self.ping.as_ref(), self.pong.as_ref())
@@ -552,6 +619,7 @@ impl CanvasGpu {
                         size: wgpu::BufferSize::new(std::mem::size_of::<CompositeParams>() as u64),
                     }),
                 },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.white_mask.view) },
             ],
         });
         {
@@ -592,6 +660,7 @@ impl CanvasGpu {
         self.stroke_owner = None;
         self.stroke_pre = None;
         self.layers.clear(); // new document
+        self.masks.clear();
         self.undo_stack.clear();
         self.redo_stack.clear();
     }
@@ -1075,6 +1144,7 @@ impl CanvasGpu {
                         size: wgpu::BufferSize::new(std::mem::size_of::<CompositeParams>() as u64),
                     }),
                 },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.white_mask.view) },
             ],
         });
         {
@@ -1110,11 +1180,18 @@ impl CanvasGpu {
         dabs: &[Dab],
         erase: bool,
         into_wet: bool,
+        into_mask: bool,
     ) {
         if dabs.is_empty() {
             return;
         }
-        let target = if into_wet { self.wet.as_ref() } else { self.layers.get(&id) };
+        let target = if into_mask {
+            self.masks.get(&id)
+        } else if into_wet {
+            self.wet.as_ref()
+        } else {
+            self.layers.get(&id)
+        };
         let Some(target) = target else { return };
 
         if dabs.len() as u64 > self.dab_capacity {
@@ -1175,6 +1252,8 @@ impl CanvasGpu {
         encoder: &mut wgpu::CommandEncoder,
         order: &[LayerDraw],
     ) -> bool {
+        self.ensure_white(queue);
+
         // Write all layer params up front (one buffer, dynamic offsets).
         let visible: Vec<&LayerDraw> = order.iter().filter(|l| l.visible).collect();
         for (i, l) in visible.iter().enumerate() {
@@ -1201,13 +1280,13 @@ impl CanvasGpu {
 
         // Ordered passes: each visible layer, plus the wet stroke just above its
         // owner so the in-progress stroke previews at the right depth.
-        let mut passes: Vec<(&wgpu::TextureView, u32)> = Vec::new();
+        let mut passes: Vec<(&wgpu::TextureView, u32, &wgpu::TextureView)> = Vec::new();
         for (i, l) in visible.iter().enumerate() {
             if let Some(layer) = self.layers.get(&l.id) {
-                passes.push((&layer.view, (i as u64 * PARAMS_STRIDE) as u32));
+                passes.push((&layer.view, (i as u64 * PARAMS_STRIDE) as u32, self.mask_view(l.id)));
                 if self.wet_owner == Some(l.id) {
                     if let Some(wet) = self.wet.as_ref() {
-                        passes.push((&wet.view, WET_PARAMS_OFFSET));
+                        passes.push((&wet.view, WET_PARAMS_OFFSET, &self.white_mask.view));
                     }
                 }
             }
@@ -1226,7 +1305,7 @@ impl CanvasGpu {
         }
 
         let mut src_is_ping = true;
-        for (layer_view, offset) in passes {
+        for (layer_view, offset, mask_view) in passes {
             let (src, dst) = if src_is_ping { (ping, pong) } else { (pong, ping) };
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("composite.bg"),
@@ -1243,6 +1322,7 @@ impl CanvasGpu {
                             size: wgpu::BufferSize::new(std::mem::size_of::<CompositeParams>() as u64),
                         }),
                     },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(mask_view) },
                 ],
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1436,6 +1516,8 @@ pub struct CanvasPaint {
     pub wet_end: bool,
     pub wet_opacity: f32,
     pub paint_into_wet: bool,
+    /// Route brush dabs to the active layer's mask instead of its pixels.
+    pub paint_mask: bool,
     /// Whether the document changed this frame (gates recompositing).
     pub dirty: bool,
     /// Selection operation to apply this frame, if any.
@@ -1483,7 +1565,7 @@ impl CallbackTrait for CanvasPaint {
         if self.wet_begin {
             gpu.wet_begin(encoder, self.active_id, self.wet_opacity);
         }
-        gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs, self.erase, self.paint_into_wet);
+        gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs, self.erase, self.paint_into_wet, self.paint_mask);
         if self.wet_end {
             gpu.wet_end(device, queue, encoder);
         }
@@ -1586,7 +1668,7 @@ mod gpu_tests {
         gpu.begin_command(&device, &mut enc, l0, "test");
         gpu.wet_begin(&mut enc, l0, 1.0);
         let dab = Dab { center: [2.0, 2.0], radius: 2.5, hardness: 0.95, color: [0.0, 0.0, 1.0, 1.0] };
-        gpu.paint_dabs(&device, &queue, &mut enc, l0, &[dab], false, true);
+        gpu.paint_dabs(&device, &queue, &mut enc, l0, &[dab], false, true, false);
         gpu.wet_end(&device, &queue, &mut enc);
         // Region-COW: only snapshot the touched corner.
         gpu.commit_command(&device, &mut enc, [0, 0, 5, 5]);
@@ -1631,7 +1713,7 @@ mod gpu_tests {
             &SelectionOp::Marquee { rect: [0.0, 0.0, 4.0, 8.0], ellipse: false },
         );
         let dab = Dab { center: [4.0, 4.0], radius: 16.0, hardness: 0.99, color: [0.0, 0.0, 1.0, 1.0] };
-        gpu.paint_dabs(&device, &queue, &mut enc, l0, &[dab], false, false);
+        gpu.paint_dabs(&device, &queue, &mut enc, l0, &[dab], false, false, false);
         queue.submit([enc.finish()]);
         assert!(gpu.has_selection());
 
@@ -1694,5 +1776,33 @@ mod gpu_tests {
         let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
         // Inverted red (premultiplied, alpha 1): low red, high green+blue.
         assert!(px[0] < 0.2 && px[1] > 0.8 && px[2] > 0.8, "invert red -> cyan: {px:?}");
+    }
+
+    // A layer mask (0 on the left half) hides those pixels in the composite.
+    #[test]
+    fn layer_mask_hides() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping layer_mask_hides");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+        gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
+        let mut mvals = vec![0.0f32; 64];
+        for y in 0..8 {
+            for x in 4..8 {
+                mvals[y * 8 + x] = 1.0; // reveal right half
+            }
+        }
+        gpu.set_mask(&device, &queue, l0, Some(&mvals));
+        let order = vec![LayerDraw { id: l0, opacity: 1.0, blend: 0, visible: true, adjust_kind: 0, adjust: [0.0; 4] }];
+        let p = gpu.composite_now(&device, &queue, &order);
+        let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
+        let right = gpu.read_composite_pixel(&device, &queue, p, 6, 4).unwrap();
+        assert!(left[3] < 0.1, "masked-out left is transparent: {left:?}");
+        assert!(right[0] > 0.9 && right[3] > 0.9, "revealed right is red: {right:?}");
     }
 }

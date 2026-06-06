@@ -1,6 +1,8 @@
 //! The eframe application: panels, tools, and the GPU canvas. Owns document
 //! state and drives GPU uploads/readbacks via `frame.wgpu_render_state()`.
 
+use std::collections::HashSet;
+
 use eframe::egui_wgpu;
 use eframe::wgpu;
 use half::f16;
@@ -137,6 +139,10 @@ pub struct PigmentApp {
     clipboard_size: Size,
     resize_w: u32,
     resize_h: u32,
+
+    // Layer masks.
+    masked_layers: HashSet<LayerId>,
+    edit_mask: bool,
 }
 
 /// Build the uv-space layer-from-canvas affine for a translate + uniform scale
@@ -207,7 +213,29 @@ impl PigmentApp {
             clipboard_size: Size::new(1, 1),
             resize_w: 1280,
             resize_h: 800,
+            masked_layers: HashSet::new(),
+            edit_mask: false,
         }
+    }
+
+    fn add_mask(&mut self, frame: &mut eframe::Frame, from_selection: bool) {
+        let active = self.active_id();
+        let values = if from_selection && self.selection_active {
+            Some(self.read_selection(frame))
+        } else {
+            None
+        };
+        with_gpu(frame, |gpu, d, q| gpu.set_mask(d, q, active, values.as_deref()));
+        self.masked_layers.insert(active);
+        self.force_composite = true;
+    }
+
+    fn delete_mask(&mut self, frame: &mut eframe::Frame) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, _, _| gpu.delete_mask(active));
+        self.masked_layers.remove(&active);
+        self.edit_mask = false;
+        self.force_composite = true;
     }
 
     /// Read every layer to CPU f32, map each through `map`, recreate the canvas
@@ -1026,6 +1054,22 @@ impl eframe::App for PigmentApp {
                 })
                 .response
                 .on_hover_text("New adjustment layer");
+                ui.menu_button("Mask", |ui| {
+                    let has = self.masked_layers.contains(&self.active_id());
+                    if ui.button("Add white mask").clicked() {
+                        self.add_mask(frame, false);
+                        ui.close_menu();
+                    }
+                    if ui.add_enabled(self.selection_active, egui::Button::new("Add from selection")).clicked() {
+                        self.add_mask(frame, true);
+                        ui.close_menu();
+                    }
+                    if ui.add_enabled(has, egui::Button::new("Delete mask")).clicked() {
+                        self.delete_mask(frame);
+                        ui.close_menu();
+                    }
+                    ui.add_enabled(has, egui::Checkbox::new(&mut self.edit_mask, "Edit mask (brush=reveal, eraser=hide)"));
+                });
             });
             ui.separator();
 
@@ -1182,6 +1226,7 @@ impl eframe::App for PigmentApp {
                 let mut wet_end = false;
                 let mut bake = false;
                 let erase = self.tool == Tool::Eraser;
+                let paint_mask = self.edit_mask && self.masked_layers.contains(&self.active_id());
                 let dirty_radius = self.brush_size * 0.5 + 1.0; // max dab extent
                 // Brush paints full-coverage dabs into the wet layer (opacity is
                 // applied when flattening). Eraser paints directly at its strength.
@@ -1226,10 +1271,10 @@ impl eframe::App for PigmentApp {
                             let cur = screen_to_doc(p, doc_rect, self.doc.size);
                             match self.stroke_last {
                                 None => {
-                                    begin_command = true;
+                                    begin_command = !paint_mask; // mask paint isn't undoable yet
                                     self.stroke_dirty = None;
                                     self.expand_dirty(cur, dirty_radius);
-                                    if !erase {
+                                    if !erase && !paint_mask {
                                         wet_begin = true;
                                         self.wet_active = true;
                                     }
@@ -1379,6 +1424,12 @@ impl eframe::App for PigmentApp {
                         }
                     }
                 }
+                // Painting into a mask reveals (white); the eraser hides.
+                if paint_mask && !erase {
+                    for d in &mut dabs {
+                        d.color = [1.0, 1.0, 1.0, 1.0];
+                    }
+                }
 
                 let layers = self.layer_order();
 
@@ -1434,6 +1485,7 @@ impl eframe::App for PigmentApp {
                         wet_end,
                         wet_opacity: self.brush_opacity,
                         paint_into_wet: self.wet_active,
+                        paint_mask,
                         dirty,
                         selection_op: self.sel_op_pending.take(),
                         time,
