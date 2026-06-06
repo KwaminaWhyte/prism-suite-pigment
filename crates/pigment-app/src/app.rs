@@ -143,6 +143,11 @@ pub struct PigmentApp {
     // Layer masks.
     masked_layers: HashSet<LayerId>,
     edit_mask: bool,
+
+    // Filters.
+    filter_radius: f32,
+    filter_amount: f32,
+    filter_block: f32,
 }
 
 /// Build the uv-space layer-from-canvas affine for a translate + uniform scale
@@ -215,7 +220,16 @@ impl PigmentApp {
             resize_h: 800,
             masked_layers: HashSet::new(),
             edit_mask: false,
+            filter_radius: 4.0,
+            filter_amount: 1.0,
+            filter_block: 8.0,
         }
+    }
+
+    fn do_filter(&mut self, frame: &mut eframe::Frame, kind: u32, radius: f32, amount: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| gpu.apply_filter(d, q, active, kind, radius, amount));
+        self.force_composite = true;
     }
 
     fn add_mask(&mut self, frame: &mut eframe::Frame, from_selection: bool) {
@@ -906,6 +920,25 @@ impl eframe::App for PigmentApp {
                     }
                     if ui.button("Flip layer vertical").clicked() {
                         self.flip_active(frame, false);
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Filter", |ui| {
+                    ui.add(egui::Slider::new(&mut self.filter_radius, 0.0..=40.0).text("blur radius"));
+                    if ui.button("Gaussian blur").clicked() {
+                        self.do_filter(frame, 1, self.filter_radius, 0.0);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.add(egui::Slider::new(&mut self.filter_amount, 0.0..=4.0).text("sharpen amount"));
+                    if ui.button("Sharpen").clicked() {
+                        self.do_filter(frame, 2, 0.0, self.filter_amount);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.add(egui::Slider::new(&mut self.filter_block, 1.0..=40.0).text("pixel size"));
+                    if ui.button("Pixelate").clicked() {
+                        self.do_filter(frame, 3, self.filter_block, 0.0);
                         ui.close_menu();
                     }
                 });

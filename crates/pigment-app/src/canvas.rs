@@ -79,6 +79,18 @@ struct DisplayUniform {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct FilterParams {
+    kind: u32,
+    _p: [u32; 3],
+    texel: [f32; 2],
+    dir: [f32; 2],
+    amount: f32,
+    radius: f32,
+    _q: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ShapeUniform {
     rect: [f32; 4],
     size: [f32; 2],
@@ -253,6 +265,11 @@ pub struct CanvasGpu {
     masks: HashMap<LayerId, GpuLayer>,
     white_mask: GpuLayer,
     white_written: bool,
+
+    // Destructive filters.
+    filter_pipeline: wgpu::RenderPipeline,
+    filter_bgl: wgpu::BindGroupLayout,
+    filter_uniform: wgpu::Buffer,
 }
 
 impl CanvasGpu {
@@ -455,6 +472,45 @@ impl CanvasGpu {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        // --- Filter pipeline ---
+        let filter_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("filter.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/filter.wgsl").into()),
+        });
+        let filter_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("filter.bgl"),
+            entries: &[
+                sampler_entry(0),
+                tex_entry(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let filter_pipeline = make_render_pipeline(
+            device,
+            "filter",
+            &filter_mod,
+            "fs_main",
+            &[&filter_bgl],
+            &[],
+            FMT,
+            None,
+        );
+        let filter_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filter.uniform"),
+            size: std::mem::size_of::<FilterParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let display_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("display.uniform"),
             size: std::mem::size_of::<DisplayUniform>() as u64,
@@ -505,6 +561,77 @@ impl CanvasGpu {
             masks: HashMap::new(),
             white_mask: make_target_fmt(device, Size::new(1, 1), "white.mask", FMT),
             white_written: false,
+            filter_pipeline,
+            filter_bgl,
+            filter_uniform,
+        }
+    }
+
+    fn filter_pass(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &wgpu::TextureView,
+        output: &wgpu::TextureView,
+        kind: u32,
+        dir: [f32; 2],
+        amount: f32,
+        radius: f32,
+    ) {
+        let (w, h) = (self.canvas_size.width as f32, self.canvas_size.height as f32);
+        queue.write_buffer(
+            &self.filter_uniform,
+            0,
+            bytemuck::bytes_of(&FilterParams {
+                kind,
+                _p: [0; 3],
+                texel: [1.0 / w, 1.0 / h],
+                dir,
+                amount,
+                radius,
+                _q: [0.0; 2],
+            }),
+        );
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("filter.bg"),
+            layout: &self.filter_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(input) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.filter_uniform.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("filter.pass"),
+                color_attachments: &[Some(clear_attachment(output))],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.filter_pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit([enc.finish()]);
+    }
+
+    /// Apply a destructive filter to a layer (kind: 1 blur, 2 sharpen, 3 pixelate).
+    pub fn apply_filter(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId, kind: u32, radius: f32, amount: f32) {
+        self.begin_command_now(device, queue, id, "Filter");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else { return };
+        if kind == 1 {
+            let tx = [1.0 / self.canvas_size.width as f32, 0.0];
+            let ty = [0.0, 1.0 / self.canvas_size.height as f32];
+            self.filter_pass(device, queue, &layer.view, &pong.view, 1, tx, 0.0, radius);
+            self.filter_pass(device, queue, &pong.view, &layer.view, 1, ty, 0.0, radius);
+        } else {
+            self.filter_pass(device, queue, &layer.view, &pong.view, kind, [0.0; 2], amount, radius);
+            let mut enc = device.create_command_encoder(&Default::default());
+            copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+            queue.submit([enc.finish()]);
         }
     }
 
