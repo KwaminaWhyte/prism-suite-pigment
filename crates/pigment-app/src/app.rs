@@ -56,9 +56,10 @@ enum LayerAction {
     MoveDown(LayerId),
 }
 
-fn image_to_f16_bytes(img: &LoadedImage) -> Vec<u8> {
-    let mut o = Vec::with_capacity(img.rgba8.len() * 2);
-    for px in img.rgba8.chunks_exact(4) {
+/// 8-bit sRGB RGBA -> linear-premultiplied f16 bytes (the GPU layer format).
+fn rgba8_to_f16_bytes(rgba8: &[u8]) -> Vec<u8> {
+    let mut o = Vec::with_capacity(rgba8.len() * 2);
+    for px in rgba8.chunks_exact(4) {
         let a = px[3] as f32 / 255.0;
         let ch = [
             srgb_to_linear(px[0] as f32 / 255.0) * a,
@@ -71,6 +72,10 @@ fn image_to_f16_bytes(img: &LoadedImage) -> Vec<u8> {
         }
     }
     o
+}
+
+fn image_to_f16_bytes(img: &LoadedImage) -> Vec<u8> {
+    rgba8_to_f16_bytes(&img.rgba8)
 }
 
 fn f16_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
@@ -703,6 +708,103 @@ impl PigmentApp {
         self.needs_fit = true;
     }
 
+    fn open_psd(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("Photoshop", &["psd"]).pick_file() else {
+            return;
+        };
+        let doc_psd = match pigment_io::psd_import::load_psd(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("open .psd failed: {e}");
+                return;
+            }
+        };
+        let size = Size::new(doc_psd.width.max(1), doc_psd.height.max(1));
+        let mut doc = Document::new(size);
+        doc.layers.layers.clear();
+        let mut staged = Vec::new();
+        for pl in &doc_psd.layers {
+            let id = doc.layers.alloc_id();
+            let mut layer = Layer::raster(id, pl.name.clone());
+            layer.opacity = pl.opacity;
+            layer.visible = pl.visible;
+            layer.blend = BlendMode::from_shader_id(pl.blend);
+            doc.layers.layers.push(layer);
+            staged.push((id, rgba8_to_f16_bytes(&pl.rgba8)));
+        }
+        if staged.is_empty() {
+            let id = doc.layers.add_raster("Background");
+            staged.push((id, vec![0u8; (size.width * size.height * 8) as usize]));
+        }
+        self.background_id = doc.layers.layers.first().map(|l| l.id).unwrap_or(LayerId(0));
+        doc.active_layer = doc.layers.layers.last().map(|l| l.id);
+        self.doc = doc;
+        self.pending = Some(PendingUpload { size, layers: staged });
+        self.masked_layers.clear();
+        self.needs_fit = true;
+    }
+
+    fn open_exr(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("OpenEXR", &["exr"]).pick_file() else {
+            return;
+        };
+        let (size, rgba) = match pigment_io::exr_io::load_exr(&path) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("open .exr failed: {e}");
+                return;
+            }
+        };
+        // EXR is linear straight RGBA -> premultiply to f16.
+        let mut bytes = Vec::with_capacity(rgba.len() * 2);
+        for px in rgba.chunks_exact(4) {
+            let a = px[3];
+            for c in 0..3 {
+                bytes.extend_from_slice(&f16::from_f32(px[c] * a).to_le_bytes());
+            }
+            bytes.extend_from_slice(&f16::from_f32(a).to_le_bytes());
+        }
+        self.doc = Document::new(size);
+        self.background_id = self.doc.layers.layers[0].id;
+        self.pending = Some(PendingUpload { size, layers: vec![(self.background_id, bytes)] });
+        self.masked_layers.clear();
+        self.needs_fit = true;
+    }
+
+    fn export_image(&mut self, frame: &mut eframe::Frame) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp"])
+            .set_file_name("export.png")
+            .save_file()
+        else {
+            return;
+        };
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let order = self.layer_order();
+        let comp = with_gpu(frame, |gpu, d, q| {
+            let p = gpu.composite_now(d, q, &order);
+            gpu.read_composite(d, q, p)
+        })
+        .flatten();
+        self.force_composite = true;
+        let Some(bytes) = comp else { return };
+        let f = f16_bytes_to_f32(&bytes);
+        // Composite is linear premultiplied -> straight sRGB 8-bit.
+        let mut rgba8 = Vec::with_capacity((w * h * 4) as usize);
+        for px in f.chunks_exact(4) {
+            let a = px[3];
+            let inv = if a > 1e-5 { 1.0 / a } else { 0.0 };
+            let to8 = |lin: f32| (linear_to_srgb((lin * inv).clamp(0.0, 1.0)) * 255.0).round() as u8;
+            rgba8.push(to8(px[0]));
+            rgba8.push(to8(px[1]));
+            rgba8.push(to8(px[2]));
+            rgba8.push((a.clamp(0.0, 1.0) * 255.0).round() as u8);
+        }
+        if let Err(e) = pigment_io::export::save_rgba8(&path, &rgba8, w, h) {
+            log::error!("export failed: {e}");
+        }
+    }
+
     fn save_pigment(&mut self, frame: &mut eframe::Frame) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Pigment", &["pigment"])
@@ -1010,8 +1112,21 @@ impl eframe::App for PigmentApp {
                         self.open_pigment();
                         ui.close_menu();
                     }
+                    if ui.button("Open .psd…").clicked() {
+                        self.open_psd();
+                        ui.close_menu();
+                    }
+                    if ui.button("Open .exr…").clicked() {
+                        self.open_exr();
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Save .pigment…").clicked() {
                         self.save_pigment(frame);
+                        ui.close_menu();
+                    }
+                    if ui.button("Export image…").clicked() {
+                        self.export_image(frame);
                         ui.close_menu();
                     }
                 });

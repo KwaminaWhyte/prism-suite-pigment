@@ -5,6 +5,9 @@
 //! in later phases (PLAN.md §4).
 
 pub mod document_file;
+pub mod exr_io;
+pub mod export;
+pub mod psd_import;
 pub mod resize;
 pub mod text;
 
