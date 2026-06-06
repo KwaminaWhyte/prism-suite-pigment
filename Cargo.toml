@@ -6,7 +6,7 @@ members = ["crates/pigment-app"]
 version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/pigment-editor/pigment"
+repository = "https://github.com/KwaminaWhyte/prism-suite-pigment"
 
 [workspace.dependencies]
 # Shared third-party deps pinned once (verify with `cargo add` at build).

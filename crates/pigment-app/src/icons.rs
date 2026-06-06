@@ -53,6 +53,8 @@ pub const ERASER: &str = ph::ERASER;
 pub const CLONE: &str = ph::STAMP;
 /// Healing-brush tool.
 pub const HEAL: &str = ph::BANDAIDS;
+/// Spot-healing tool (auto-source).
+pub const SPOT_HEAL: &str = ph::SPARKLE;
 /// Fill / paint-bucket tool.
 pub const FILL: &str = ph::PAINT_BUCKET;
 /// Eyedropper / color-pick tool.

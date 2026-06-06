@@ -7,12 +7,23 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Spot Healing** (Phase 6 retouch). Brush over a blemish — **no manual source**;
+  on release `prism_core::heal::spot_heal` auto-finds a clean nearby source by
+  scoring boundary-ring match across candidate translations, then gradient-domain
+  blends it in. Unit-tested (blemish removal, empty-mask no-op).
 - **Healing Brush** (Phase 6 retouch). Alt-click sets a source; brush over the area
   to repair; on release a gradient-domain Poisson solve transplants the source's
   *texture* while matching the destination's tone/color at the region boundary —
   seamless repair, not a hard-edged copy. Solver lives in the shared core
   (`prism_core::heal::seamless_clone`, Gauss–Seidel membrane), unit-tested for
   tone-matching and texture transfer.
+
+### Fixed
+- Healing Brush: the Poisson guidance read source gradients at the region
+  boundary from an unfilled (zero) source buffer, causing tone overshoot. The
+  source is now built over the full image (offset-shifted, edge-clamped).
+
+### Added
 - **Clone Stamp tool** (Phase 6 retouch). Alt-click sets a source anchor; dragging
   stamps pixels copied from a frozen pre-stroke snapshot at a locked (aligned)
   offset, through a dedicated GPU clone-dab pass (`clone.wgsl`). Soft brush +
