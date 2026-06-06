@@ -15,6 +15,7 @@ pub mod geometry;
 pub mod histogram;
 pub mod layer;
 pub mod raster;
+pub mod shape;
 pub mod tile;
 
 pub use adjust::Adjustment;

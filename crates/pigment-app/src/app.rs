@@ -11,10 +11,14 @@ use pigment_core::fill::flood_fill_mask;
 use pigment_core::histogram::{self, Histogram};
 use pigment_core::raster::{self, CombineMode};
 use pigment_core::adjust::Adjustment;
+use pigment_core::layer::{TextDef, VectorDef};
+use pigment_core::shape::{self, ShapeKind};
 use pigment_core::{BlendMode, Document, Layer, LayerId, LayerKind, Size};
 use pigment_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
 use pigment_io::resize::{resize_rgba_f32, Quality};
+use pigment_io::text::{self, TextAlign};
 use pigment_io::LoadedImage;
+use std::collections::HashMap;
 
 use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTransform};
 
@@ -32,6 +36,10 @@ enum Tool {
     MagicWand,
     Transform,
     Crop,
+    Text,
+    ShapeRect,
+    ShapeEllipse,
+    Gradient,
 }
 
 /// Layers + pixels staged for GPU upload on the next frame.
@@ -151,6 +159,11 @@ pub struct PigmentApp {
     filter_block: f32,
 
     hist: Option<Histogram>,
+
+    // Phase 4: generated (text/vector) layers re-rasterize when their def changes.
+    gen_fp: HashMap<LayerId, u64>,
+    shape_drag: Option<LayerId>,
+    grad_start: Option<egui::Vec2>,
 }
 
 /// Build the uv-space layer-from-canvas affine for a translate + uniform scale
@@ -227,7 +240,83 @@ impl PigmentApp {
             filter_amount: 1.0,
             filter_block: 8.0,
             hist: None,
+            gen_fp: HashMap::new(),
+            shape_drag: None,
+            grad_start: None,
         }
+    }
+
+    /// Re-rasterize any text/vector layer whose definition changed, uploading
+    /// the result to its layer texture (keeps them editable after creation).
+    fn sync_generated_layers(&mut self, frame: &mut eframe::Frame) {
+        use std::hash::{Hash, Hasher};
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let mut jobs: Vec<(LayerId, Vec<u8>)> = Vec::new();
+        for l in &self.doc.layers.layers {
+            let fp = match &l.kind {
+                LayerKind::Text(t) => {
+                    let mut hsh = std::collections::hash_map::DefaultHasher::new();
+                    t.text.hash(&mut hsh);
+                    t.font_px.to_bits().hash(&mut hsh);
+                    t.align.hash(&mut hsh);
+                    for c in t.color {
+                        c.to_bits().hash(&mut hsh);
+                    }
+                    (w, h).hash(&mut hsh);
+                    hsh.finish()
+                }
+                LayerKind::Vector(v) => {
+                    let mut hsh = std::collections::hash_map::DefaultHasher::new();
+                    v.kind.hash(&mut hsh);
+                    for x in v.rect {
+                        x.to_bits().hash(&mut hsh);
+                    }
+                    for c in v.color {
+                        c.to_bits().hash(&mut hsh);
+                    }
+                    (w, h).hash(&mut hsh);
+                    hsh.finish()
+                }
+                _ => continue,
+            };
+            if self.gen_fp.get(&l.id) == Some(&fp) {
+                continue;
+            }
+            self.gen_fp.insert(l.id, fp);
+            let px = match &l.kind {
+                LayerKind::Text(t) => {
+                    let align = match t.align {
+                        1 => TextAlign::Center,
+                        2 => TextAlign::Right,
+                        _ => TextAlign::Left,
+                    };
+                    text::render_text(&t.text, t.font_px, t.color, w, h, align)
+                }
+                LayerKind::Vector(v) => {
+                    let kind = if v.kind == 1 { ShapeKind::Ellipse } else { ShapeKind::Rectangle };
+                    let c = v.color;
+                    let lin = [
+                        srgb_to_linear(c[0]),
+                        srgb_to_linear(c[1]),
+                        srgb_to_linear(c[2]),
+                        c[3],
+                    ];
+                    shape::fill_shape(kind, v.rect, lin, w, h)
+                }
+                _ => continue,
+            };
+            jobs.push((l.id, f32_to_f16_bytes(&px)));
+        }
+        if jobs.is_empty() {
+            return;
+        }
+        with_gpu(frame, |gpu, device, queue| {
+            for (id, bytes) in &jobs {
+                gpu.ensure_layer(device, *id);
+                gpu.upload_layer(queue, *id, bytes);
+            }
+        });
+        self.force_composite = true;
     }
 
     fn refresh_histogram(&mut self, frame: &mut eframe::Frame) {
@@ -241,6 +330,34 @@ impl PigmentApp {
         if let Some(b) = comp {
             self.hist = Some(histogram::histogram(&f16_bytes_to_f32(&b), 256));
         }
+    }
+
+    /// Fill the active layer with a foreground→transparent linear gradient,
+    /// composited over its existing pixels.
+    fn do_gradient(&mut self, frame: &mut eframe::Frame, p0: egui::Vec2, p1: egui::Vec2) {
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let active = self.active_id();
+        let c = self.brush_color;
+        let c0 = [
+            srgb_to_linear(c.r() as f32 / 255.0),
+            srgb_to_linear(c.g() as f32 / 255.0),
+            srgb_to_linear(c.b() as f32 / 255.0),
+            1.0,
+        ];
+        let grad = shape::linear_gradient((p0.x, p0.y), (p1.x, p1.y), c0, [0.0; 4], w, h);
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, "Gradient");
+            let Some(b) = gpu.read_layer(d, q, active) else { return };
+            let mut base = f16_bytes_to_f32(&b);
+            for i in 0..(w * h) as usize {
+                let ga = grad[i * 4 + 3];
+                for c in 0..4 {
+                    base[i * 4 + c] = grad[i * 4 + c] + base[i * 4 + c] * (1.0 - ga);
+                }
+            }
+            gpu.upload_layer(q, active, &f32_to_f16_bytes(&base));
+        });
+        self.force_composite = true;
     }
 
     fn do_filter(&mut self, frame: &mut eframe::Frame, kind: u32, radius: f32, amount: f32) {
@@ -820,6 +937,19 @@ fn flip(src: &[f32], w: u32, h: u32, horizontal: bool) -> Vec<f32> {
     dst
 }
 
+fn srgba_to_color(c: [f32; 4]) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(
+        (c[0] * 255.0) as u8,
+        (c[1] * 255.0) as u8,
+        (c[2] * 255.0) as u8,
+        (c[3] * 255.0) as u8,
+    )
+}
+
+fn color_to_srgba(c: egui::Color32) -> [f32; 4] {
+    [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0, c.a() as f32 / 255.0]
+}
+
 fn adjustment_ui(ui: &mut egui::Ui, adj: &mut Adjustment) {
     match adj {
         Adjustment::BrightnessContrast { brightness, contrast } => {
@@ -1022,6 +1152,10 @@ impl eframe::App for PigmentApp {
                 (Tool::MagicWand, icons::MAGIC_WAND, "Magic wand"),
                 (Tool::Transform, icons::TRANSFORM, "Transform"),
                 (Tool::Crop, icons::CROP, "Crop"),
+                (Tool::Text, icons::TEXT, "Text"),
+                (Tool::ShapeRect, icons::SHAPE, "Rectangle shape"),
+                (Tool::ShapeEllipse, icons::ELLIPSE_SELECT, "Ellipse shape"),
+                (Tool::Gradient, icons::GRADIENT, "Gradient"),
             ] {
                 let btn = egui::SelectableLabel::new(
                     self.tool == tool,
@@ -1201,8 +1335,28 @@ impl eframe::App for PigmentApp {
                                 .show_value(false)
                                 .text("opacity"),
                         );
-                        if let LayerKind::Adjustment(adj) = &mut layer.kind {
-                            adjustment_ui(ui, adj);
+                        match &mut layer.kind {
+                            LayerKind::Adjustment(adj) => adjustment_ui(ui, adj),
+                            LayerKind::Text(t) => {
+                                ui.add(egui::TextEdit::singleline(&mut t.text).desired_width(150.0));
+                                ui.add(egui::Slider::new(&mut t.font_px, 6.0..=300.0).text("size"));
+                                let mut col = srgba_to_color(t.color);
+                                if ui.color_edit_button_srgba(&mut col).changed() {
+                                    t.color = color_to_srgba(col);
+                                }
+                                ui.horizontal(|ui| {
+                                    ui.selectable_value(&mut t.align, 0, "L");
+                                    ui.selectable_value(&mut t.align, 1, "C");
+                                    ui.selectable_value(&mut t.align, 2, "R");
+                                });
+                            }
+                            LayerKind::Vector(v) => {
+                                let mut col = srgba_to_color(v.color);
+                                if ui.color_edit_button_srgba(&mut col).changed() {
+                                    v.color = color_to_srgba(col);
+                                }
+                            }
+                            _ => {}
                         }
                     });
                 ui.separator();
@@ -1335,8 +1489,84 @@ impl eframe::App for PigmentApp {
                             self.xform_active = false;
                         }
                     }
-                    // Implemented in a later Phase 2 wave.
                     Tool::Crop => {}
+                    Tool::Text => {
+                        if response.clicked() {
+                            let id = self.doc.layers.add_text(TextDef::default());
+                            self.doc.active_layer = Some(id);
+                        }
+                    }
+                    Tool::ShapeRect | Tool::ShapeEllipse => {
+                        let kind = if self.tool == Tool::ShapeEllipse { 1 } else { 0 };
+                        if response.drag_started() {
+                            if let Some(p) = response.interact_pointer_pos() {
+                                let s = screen_to_doc(p, doc_rect, self.doc.size);
+                                self.sel_drag_start = Some(s);
+                                let c = self.brush_color;
+                                let color = [
+                                    c.r() as f32 / 255.0,
+                                    c.g() as f32 / 255.0,
+                                    c.b() as f32 / 255.0,
+                                    1.0,
+                                ];
+                                let id = self.doc.layers.add_vector(
+                                    "Shape",
+                                    VectorDef { kind, rect: [s.x, s.y, 0.0, 0.0], color },
+                                );
+                                self.doc.active_layer = Some(id);
+                                self.shape_drag = Some(id);
+                            }
+                        }
+                        if response.dragged() {
+                            if let (Some(s), Some(p), Some(id)) =
+                                (self.sel_drag_start, response.interact_pointer_pos(), self.shape_drag)
+                            {
+                                let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                                let rect = [
+                                    s.x.min(cur.x),
+                                    s.y.min(cur.y),
+                                    (s.x - cur.x).abs(),
+                                    (s.y - cur.y).abs(),
+                                ];
+                                if let Some(LayerKind::Vector(v)) =
+                                    self.doc.layers.get_mut(id).map(|l| &mut l.kind)
+                                {
+                                    v.rect = rect;
+                                }
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped() {
+                            self.shape_drag = None;
+                            self.sel_drag_start = None;
+                        }
+                    }
+                    Tool::Gradient => {
+                        if response.drag_started() {
+                            if let Some(p) = response.interact_pointer_pos() {
+                                self.grad_start = Some(screen_to_doc(p, doc_rect, self.doc.size));
+                            }
+                        }
+                        if response.dragged() {
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped() {
+                            if let (Some(s), Some(p)) =
+                                (self.grad_start.take(), response.interact_pointer_pos())
+                            {
+                                let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                                self.do_gradient(frame, s, cur);
+                            }
+                        }
+                        // Guide line.
+                        if let (Some(s), Some(p)) = (self.grad_start, response.hover_pos()) {
+                            let a = doc_to_screen(s, doc_rect, self.doc.size);
+                            ui.painter().add(egui::Shape::line_segment(
+                                [a, p],
+                                egui::Stroke::new(1.5, egui::Color32::WHITE),
+                            ));
+                        }
+                    }
                     Tool::Brush | Tool::Eraser => {
                         let spacing = (self.brush_size * 0.15).max(0.75);
                         let dt = ui.input(|i| i.stable_dt).max(1e-3);
@@ -1503,6 +1733,9 @@ impl eframe::App for PigmentApp {
                         d.color = [1.0, 1.0, 1.0, 1.0];
                     }
                 }
+
+                // Re-rasterize edited text/vector layers before compositing.
+                self.sync_generated_layers(frame);
 
                 let layers = self.layer_order();
 

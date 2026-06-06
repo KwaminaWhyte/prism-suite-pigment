@@ -6,6 +6,7 @@
 
 pub mod document_file;
 pub mod resize;
+pub mod text;
 
 use std::path::Path;
 

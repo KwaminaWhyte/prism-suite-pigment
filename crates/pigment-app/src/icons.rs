@@ -40,6 +40,12 @@ pub fn install(ctx: &egui::Context) {
 
 // --- Tool / action glyphs (re-exported Phosphor codepoints) -----------------
 
+/// Text tool.
+pub const TEXT: &str = ph::TEXT_T;
+/// Vector shape tool.
+pub const SHAPE: &str = ph::SQUARE;
+/// Gradient tool.
+pub const GRADIENT: &str = ph::DROP;
 /// Pan / hand tool.
 pub const PAN: &str = ph::HAND;
 /// Brush / paint tool.

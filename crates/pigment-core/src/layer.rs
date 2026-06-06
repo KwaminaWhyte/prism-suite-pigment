@@ -25,7 +25,36 @@ pub enum LayerKind {
     Group { children: Vec<Layer> },
     /// A non-destructive adjustment applied to the backdrop below it.
     Adjustment(Adjustment),
-    // Text / Vector / SmartObject arrive in later phases.
+    /// An editable text layer; pixels are re-rasterized from this definition.
+    Text(TextDef),
+    /// An editable vector shape; pixels are re-rasterized from this definition.
+    Vector(VectorDef),
+    // SmartObject arrives in a later phase.
+}
+
+/// Editable text-layer definition. Colors are straight sRGB; `align` is
+/// 0=left, 1=center, 2=right.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TextDef {
+    pub text: String,
+    pub font_px: f32,
+    pub color: [f32; 4],
+    pub align: u8,
+}
+
+impl Default for TextDef {
+    fn default() -> Self {
+        Self { text: "Text".into(), font_px: 48.0, color: [1.0, 1.0, 1.0, 1.0], align: 0 }
+    }
+}
+
+/// Editable vector-shape definition. `kind` 0=rectangle, 1=ellipse; `rect` is
+/// `[x, y, w, h]` in document px; `color` is straight sRGB.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct VectorDef {
+    pub kind: u8,
+    pub rect: [f32; 4],
+    pub color: [f32; 4],
 }
 
 /// One node in the layer tree.
@@ -60,6 +89,30 @@ impl Layer {
             id,
             name: name.into(),
             kind: LayerKind::Adjustment(adj),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+            tiles: HashMap::new(),
+        }
+    }
+
+    pub fn text(id: LayerId, name: impl Into<String>, def: TextDef) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: LayerKind::Text(def),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+            tiles: HashMap::new(),
+        }
+    }
+
+    pub fn vector(id: LayerId, name: impl Into<String>, def: VectorDef) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: LayerKind::Vector(def),
             blend: BlendMode::Normal,
             opacity: 1.0,
             visible: true,
@@ -109,6 +162,18 @@ impl LayerTree {
     pub fn add_adjustment(&mut self, adj: Adjustment) -> LayerId {
         let id = self.alloc_id();
         self.layers.push(Layer::adjustment(id, adj.name(), adj));
+        id
+    }
+
+    pub fn add_text(&mut self, def: TextDef) -> LayerId {
+        let id = self.alloc_id();
+        self.layers.push(Layer::text(id, "Text", def));
+        id
+    }
+
+    pub fn add_vector(&mut self, name: impl Into<String>, def: VectorDef) -> LayerId {
+        let id = self.alloc_id();
+        self.layers.push(Layer::vector(id, name, def));
         id
     }
 
