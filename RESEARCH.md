@@ -99,3 +99,163 @@ Sources: github.com/rust-windowing/winit/issues/3833 · github.com/Fuzzyzilla/oc
 - **Resize:** **`fast_image_resize` 6.0** — SIMD (SSE4/AVX2/NEON/WASM), Lanczos3/Bicubic/Bilinear/Box/Nearest, premultiplied-correct, optional `image` integration. Lanczos3 downscale, Bicubic upscale; >2× upscale → Real-ESRGAN. Alt: `pic-scale`.
 
 Sources: crates.io/crates/undo · docs.rs/undo_2 · github.com/mikwielgus/undoredo · github.com/pop-os/cosmic-text · github.com/grovesNL/glyphon · github.com/linebender/kurbo (+ #277) · docs.rs/lyon_tessellation · lib.rs/crates/i_overlay · github.com/pykeio/ort · github.com/huggingface/candle · github.com/Cykooz/fast_image_resize · graphite.rs
+
+---
+
+# Parity-expansion research (Phases 6–12)
+
+Findings backing the new phases in [PLAN.md](./PLAN.md) §4b. Same caveat: verify crate versions
+and model licenses at build time. wgpu confirmed still on **29.0.3** (2026-05-02); no 30/31 yet — the
+plan's `"29"` pin holds.
+
+## 6. Retouching & healing (clone / heal / patch / content-aware)
+
+- **Clone Stamp** is the easy one: sample at an offset point, stamp brush dabs reading the source
+  region — reuse the existing dab pipeline with a source-texture sampler and offset uniform. Aligned
+  vs non-aligned = whether the offset resets per stroke. Sample current / below / all-merged = which
+  composite the source reads from.
+- **Healing Brush / Patch = gradient-domain (Poisson) blending.** The trick that makes healing look
+  seamless: don't copy pixels, copy the *gradient field* of the source patch and solve a Poisson
+  equation so the result matches the destination's boundary tone/color while keeping the source's
+  texture. This is **Poisson Image Editing** (Pérez et al. 2003) / "seamless cloning"; OpenCV ships it
+  as `seamlessClone` (NORMAL_CLONE / MIXED_CLONE). Solve ∇²f = div(guidance) over the masked region
+  with Dirichlet boundary = destination, via a sparse linear solve (Jacobi/multigrid on GPU, or a CPU
+  sparse solver `nalgebra`/`faer`). Solve only over the dirty rect. Spot-healing auto-picks the source
+  from the surrounding ring.
+- **Content-Aware Fill = PatchMatch** (Barnes et al. 2009): randomized nearest-neighbor patch
+  correspondence that fills a hole by iteratively copying best-matching patches from a sampling region;
+  fast, GPU-able, and — critically — **needs no trained model** and excels at high-resolution repeating
+  texture. Modern hybrid (ECCV'22 "Guided PatchMatch", arXiv 2208.03552): run a deep model (LaMa) to
+  hallucinate plausible structure, then guided-PatchMatch to synthesize at full resolution — beats
+  either alone (users preferred it, +7.4 metric over LaMa) and avoids LaMa's blur/tiling at high res.
+  So: ship PatchMatch as the always-available baseline; LaMa-ONNX (Phase 10) is an optional structure
+  prior. Photoshop's "Remove tool" is the same idea behind a single brush.
+- **Liquify = forward-mapping mesh warp.** Maintain a displacement grid (or full-res displacement
+  texture); push/pull/twirl/pucker/bloat tools accumulate offsets under the brush; sample the source
+  through the inverse displacement at composite time (GPU). Freeze mask protects regions; reconstruct
+  blends back toward identity. Face-aware Liquify just drives those sliders from face landmarks (Ph10).
+
+Sources: en.wikipedia.org/wiki/Gradient-domain_image_processing · Pérez/Gangnet/Blake "Poisson Image
+Editing" (SIGGRAPH 2003) · docs.opencv.org (photo: seamlessClone) · Barnes et al. "PatchMatch"
+(SIGGRAPH 2009) · arxiv.org/abs/2208.03552 (Guided PatchMatch, ECCV 2022) · medium.com PatchMatch-vs-AI-inpainting
+
+## 7. Layer styles, smart objects, blend-if
+
+- **Layer styles (FX)** are deterministic GPU passes computed from the layer's alpha/shape, layered
+  in a fixed order (Photoshop's stacking: Drop Shadow behind, then Outer Glow, Stroke, the layer,
+  Inner Shadow/Glow, overlays, Bevel, Satin). Each effect = a small pass: shadows/glows are a blurred,
+  offset, colorized alpha; stroke is a distance-field/dilate of the alpha; overlays multiply a
+  color/gradient/pattern inside the alpha; bevel/emboss derives a normal from the alpha's distance
+  field and shades it. All cacheable per layer, re-run only when the layer or params change — fits the
+  existing dirty-node compositor.
+- **Smart objects** = embed a child document (or external reference) as a layer whose *rendered output*
+  is what composites; transforms/filters apply to the render, not the source, so they stay editable
+  ("edit contents" reopens the child). This is exactly the suite's render-graph node model — a smart
+  object is a graph node that evaluates a linked document on demand and caches its tiles (same
+  machinery as Dynamic Link in [../SUITE.md](../SUITE.md)). **Smart filters** = filters parented to a
+  smart object's node, stored as params, re-evaluated on change, individually masked/toggled.
+- **Blend-If / advanced blending**: per-layer "this layer" + "underlying" gray (and per-channel)
+  range sliders that gate the layer's contribution by luma/channel value, with a split-slider feathered
+  falloff — a cheap extra term in the composite shader. Plus fill-vs-opacity (fill excludes layer
+  styles), knockout, and interior-effects-blend flags.
+- **Channels**: the doc already stores RGBA in linear-premul; a channels panel exposes per-channel
+  view/edit, plus named **alpha channels** = stored selection masks (R8/R16F, the same texture type as
+  the selection mask) and **spot channels** for print. Store as extra mask layers in `prism-core`
+  (app-agnostic). Split/merge channels = trivial reshuffle.
+
+Sources: helpx.adobe.com/photoshop (layer effects, smart objects, advanced blending) · w3.org/TR/compositing-1 · ../SUITE.md (render-graph node = Dynamic Link / smart object)
+
+## 8. Filters, blur galleries, distortion, lens correction
+
+- Structure all filters as a **`prism-fx` OpenFX-style pass registry** (suite-shared): each filter
+  declares params + a GPU pass (compute preferred); runs destructively on a layer or as a Phase-7
+  smart filter. OpenFX is the established host/plugin contract (also used by Pulse/Natron-style apps),
+  so authoring once gives suite-wide reuse.
+- **Blur gallery**: field/iris/tilt-shift = spatially-varying Gaussian driven by a control-point
+  "blur map"; path/spin = directional/rotational sampling; **lens blur** = depth/alpha-weighted
+  gather with a polygonal bokeh kernel (bright-spot bloom for highlights). Motion blur = directional
+  convolution. All are gather passes over the f16 composite.
+- **Distort**: analytic inverse-coordinate warps (pinch/spherize/polar/twirl/ripple/wave) sample the
+  source through a remap; **Displace** uses a displacement map texture; **Warp** uses a Bézier/mesh
+  grid (reuse Liquify's displacement machinery).
+- **Lens Correction**: **`lensfun`** — a pure-Rust port of the LensFun project — corrects geometric
+  distortion, transverse chromatic aberration, and vignetting from the LensFun camera/lens database,
+  bit-exact-tested (1e-3) against the C++ reference. Pre-alpha API, so wrap it behind our own trait and
+  keep a polynomial-model fallback (Adobe LCP-style coefficients) for unknown lenses. Feeds both the
+  Lens Correction filter and the RAW develop module (Phase 9).
+- **Render** (clouds/fibers/flare/lighting) = procedural noise (Perlin/Simplex) + analytic generators;
+  **Stylize/Artistic** (emboss/find-edges/oil-paint/Filter-Gallery set) = convolution + edge operators
+  + kuwahara-style smoothing. All standard, no external deps.
+
+Sources: openfx.readthedocs.io · helpx.adobe.com/photoshop (blur gallery, filters, lens correction) ·
+docs.rs/lensfun · github.com/lensfun/lensfun · lensfun.github.io/manual (corrections)
+
+## 9. Pro color, RAW develop, PSD export
+
+- **Color management**: `lcms2` 6.1 (Little CMS 2.17) is the primary engine — ICC v2/v4, CMYK/Lab/XYZ,
+  rendering intents, soft-proof transforms; build a working-space abstraction in `prism-color`
+  (sRGB/AdobeRGB/Display-P3/ProPhoto/linear) and do device-link transforms at import/export and for
+  soft-proof preview (with gamut-warning overlay). `qcms` (pure-Rust, RGB+gray only) is the wasm fast
+  path. CMYK mode + separations needs an N-channel doc path (extend `prism-core` color types,
+  app-agnostic).
+- **RAW / Camera Raw**: **`rawler`** (mature; demosaics Bayer via Malvar-He-Cutler, X-Trans via
+  bilinear; parses metadata for CR2/CR3/NEF/ARW/RAF/DNG…) with **`rawloader`** as the broader-format
+  sibling; **`zenraw`** is a safe-Rust alternative emitting scene-referred linear f32 (clean handoff
+  into our linear pipeline). Develop module = scene-linear in → WB/exposure/tone-curve/HSL/detail/lens
+  (lensfun)/grain → our working space; expose as a re-editable smart-object source so RAW edits stay
+  non-destructive. The "Camera Raw filter" reuses the same control set as a filter on any layer.
+- **PSD export**: no Rust crate writes PSD (the `psd` crate is read-only); hand-write a serializer
+  against the documented Adobe PSD/PSB binary spec — layers, groups, masks, blend modes, opacity, text
+  as layers, basic layer styles, merged composite for compatibility. Validate by export→reimport
+  fidelity. Ship **`.ora`** (OpenRaster: zip + per-layer PNG + stack.xml — trivial) and **layered
+  TIFF** first as easy faithful interchange while the PSD serializer matures.
+- **Export As / Save for Web**: reuse the better-than-baseline encoders already in stack (`mozjpeg`,
+  `webp`, `ravif`, `oxipng`) with per-format quality/size preview, multi-scale (@1x/@2x/@3x), metadata
+  strip/keep, and profile embed.
+
+Sources: github.com/kornelski/rust-lcms2 · github.com/FirefoxGraphics/qcms · lib.rs/crates/rawler ·
+github.com/pedrocr/rawloader · github.com/imazen/zenraw · adobe PSD file format spec (the documented
+binary format) · openraster.org · helpx.adobe.com/photoshop (export-as / save-for-web)
+
+## 10. AI / neural tools (ort, models on demand)
+
+- Runtime: **`ort` 2.0** (ONNX Runtime) with **CoreML** (macOS), **DirectML** (Windows), **CUDA/TensorRT**
+  (NVIDIA) execution providers; **`candle`**/**`tract`** pure-Rust for wasm/no-EP fallback. Models are
+  **not bundled** — fetch to a cache on first use behind a feature flag, surface each weight's license
+  (segmentation/restoration weights are mostly MIT/Apache; diffusion weights carry OpenRAIL terms).
+- **Select Subject / Object Select**: **SAM2 / SAM3** (Meta Segment Anything, prompt-driven by
+  click/box; SAM3 added late-2025) for interactive object selection; **BiRefNet** for class-agnostic
+  saliency. Output → editable selection/mask.
+- **Remove Background / matting**: **BiRefNet_dynamic** (released 2025-03-31, trained 256²–2304²,
+  robust at any resolution, best edge fidelity) or **RMBG-2.0 / BEN2** — all ONNX.
+- **Inpaint / Remove**: **LaMa** (Fourier-conv inpainting) — feeds Phase-6 content-aware/Remove as the
+  optional structure prior.
+- **Super-resolution**: **Real-ESRGAN** (robust, widely used) or **SwinIR** (transformer, higher
+  fidelity); tile with overlap-blend for large images; >2× upscale path.
+- **Generative fill/expand**: optional and pluggable — local diffusion (`candle`/ONNX SD-class) *or* a
+  user-configured cloud endpoint (BYO key). Behind a provider trait so local/cloud/none are swappable;
+  never required for core editing.
+
+Sources: github.com/pykeio/ort · github.com/ZhengPeng7/BiRefNet · github.com/1038lab/ComfyUI-RMBG
+(RMBG-2.0/BEN2/SAM2/SAM3, v3.0.0 2026-01-01) · github.com/advimman/lama · github.com/xinntao/Real-ESRGAN ·
+github.com/JingyunLiang/SwinIR · arxiv.org/abs/2503.14757 (real-time HR inpainting)
+
+## 11. Automation, scripting, plugins
+
+- **Actions** = a serialized list of recorded operations (each command already exists as a reversible
+  `Command` in the undo system — record the same descriptors to a JSON action file). Sets, conditional
+  steps, modal toggles, insert-stop/menu-item. **Batch** = run an action over a folder/open docs;
+  **Image Processor** = bulk resize+format+ICC-convert; droplet = an action bundled as an executable
+  drop target.
+- **Scripting**: embed **`rhai`** (pure-Rust, sandboxed, easy to bind) exposing a document/layer/
+  selection API; optional **`boa`** or **`deno_core`** JS engine to court Photoshop's ExtendScript/UXP
+  script familiarity. Run-script + script-event hooks.
+- **Plugins**: an **OpenFX-style** effect plugin host in the suite-shared `prism-fx` (stable C ABI or
+  wasm-component plugins) so a filter authored once loads in Pigment, Contour, and Pulse. Panel/UI
+  plugins are a later, larger surface.
+- **Presets / assets**: brushes/gradients/patterns/styles/swatches/shapes/LUTs in a shared suite asset
+  library; import Adobe formats where feasible (`.abr` brushes, `.grd` gradients, `.pat` patterns,
+  `.asl` styles, `.aco` swatches, `.csh` shapes, `.cube`/`.3dl` LUTs), native format otherwise.
+
+Sources: rhai.rs · github.com/boa-dev/boa · github.com/denoland/deno_core · openfx.readthedocs.io ·
+helpx.adobe.com/photoshop (actions, scripting, batch, presets) · ../SUITE.md (shared asset library, prism-fx)
