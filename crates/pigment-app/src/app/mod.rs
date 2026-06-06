@@ -188,6 +188,8 @@ pub struct PigmentApp {
     clipped_layers: HashSet<LayerId>,
     /// Per-layer outer-stroke style: (straight rgba, width in doc px).
     layer_strokes: HashMap<LayerId, ([f32; 4], f32)>,
+    /// Per-layer drop-shadow style: (straight rgba, offset px [dx,dy], blur px).
+    layer_shadows: HashMap<LayerId, ([f32; 4], [f32; 2], f32)>,
 
     // Filters.
     filter_radius: f32,
@@ -287,6 +289,7 @@ impl PigmentApp {
             blend_if: HashMap::new(),
             clipped_layers: HashSet::new(),
             layer_strokes: HashMap::new(),
+            layer_shadows: HashMap::new(),
             edit_mask: false,
             filter_radius: 4.0,
             filter_amount: 1.0,

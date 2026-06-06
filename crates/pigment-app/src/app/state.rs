@@ -180,6 +180,11 @@ impl PigmentApp {
                 }
                 w.to_bits().hash(&mut h);
             }
+            if let Some((c, o, b)) = self.layer_shadows.get(&l.id) {
+                for v in c.iter().chain(o.iter()).chain(std::iter::once(b)) {
+                    v.to_bits().hash(&mut h);
+                }
+            }
         }
         h.finish()
     }
@@ -200,6 +205,7 @@ impl PigmentApp {
                 };
                 let blend_if = self.blend_if.get(&l.id).copied();
                 let stroke = self.layer_strokes.get(&l.id);
+                let shadow = self.layer_shadows.get(&l.id);
                 let cw = self.doc.size.width.max(1) as f32;
                 LayerDraw {
                     id: l.id,
@@ -214,6 +220,12 @@ impl PigmentApp {
                     has_stroke: stroke.is_some(),
                     stroke_color: stroke.map(|(c, _)| *c).unwrap_or([0.0; 4]),
                     stroke_width: stroke.map(|(_, w)| *w / cw).unwrap_or(0.0),
+                    has_shadow: shadow.is_some(),
+                    shadow_color: shadow.map(|(c, _, _)| *c).unwrap_or([0.0; 4]),
+                    shadow_offset: shadow
+                        .map(|(_, o, _)| [o[0] / cw, o[1] / cw])
+                        .unwrap_or([0.0; 2]),
+                    shadow_blur: shadow.map(|(_, _, b)| *b / cw).unwrap_or(0.0),
                 }
             })
             .collect()

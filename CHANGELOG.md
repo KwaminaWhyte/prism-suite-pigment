@@ -7,6 +7,10 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Layer style: Drop Shadow** (Phase 7). Non-destructive — a blurred, offset,
+  tinted copy of the layer's alpha drawn behind it, evaluated live in the
+  compositor (16-tap disk blur). Per-layer color (premultiplied) + offset + blur;
+  GPU pixel-tested. Reuses the stroke FX alpha-neighborhood machinery.
 - **Layer style: Stroke** (Phase 7). Non-destructive outer stroke — an alpha-edge
   ring sampled live in the compositor shader, tinted and drawn behind the layer.
   Per-layer color + width sliders; GPU pixel-tested. (First layer FX; the

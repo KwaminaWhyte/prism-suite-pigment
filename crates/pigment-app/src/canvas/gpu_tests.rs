@@ -48,6 +48,10 @@ fn compositor_brush_wet_undo() {
         has_stroke: false,
         stroke_color: [0.0; 4],
         stroke_width: 0.0,
+        has_shadow: false,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        shadow_blur: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
@@ -119,6 +123,10 @@ fn selection_clips_paint() {
         has_stroke: false,
         stroke_color: [0.0; 4],
         stroke_width: 0.0,
+        has_shadow: false,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        shadow_blur: 0.0,
     }];
 
     // Select the left half, then paint blue over the whole canvas.
@@ -213,6 +221,10 @@ fn adjustment_invert() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -227,6 +239,10 @@ fn adjustment_invert() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -274,6 +290,10 @@ fn curves_invert_master() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -288,6 +308,10 @@ fn curves_invert_master() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -379,6 +403,10 @@ fn posterize_adjustment() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -393,6 +421,10 @@ fn posterize_adjustment() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -436,6 +468,10 @@ fn blend_if_hides_bright_source() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -450,6 +486,10 @@ fn blend_if_hides_bright_source() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -506,6 +546,10 @@ fn clipping_mask_gates_by_base_alpha() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -520,6 +564,10 @@ fn clipping_mask_gates_by_base_alpha() {
             has_stroke: false,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -592,6 +640,10 @@ fn channel_save_load_roundtrip() {
         has_stroke: false,
         stroke_color: [0.0; 4],
         stroke_width: 0.0,
+        has_shadow: false,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        shadow_blur: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
@@ -648,6 +700,10 @@ fn layer_stroke_outlines_edge() {
         has_stroke: true,
         stroke_color: [1.0, 0.0, 0.0, 1.0], // red
         stroke_width: 2.0 / 16.0,           // ~2px in uv
+        has_shadow: false,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        shadow_blur: 0.0,
     }];
     let pp = gpu.composite_now(&device, &queue, &order);
     let edge = gpu.read_composite_pixel(&device, &queue, pp, 5, 8).unwrap(); // just left of square
@@ -662,6 +718,65 @@ fn layer_stroke_outlines_edge() {
         inside[0] > 0.8 && inside[1] > 0.8,
         "interior stays white: {inside:?}"
     );
+}
+
+// Drop shadow: an opaque square casts a dark, offset shadow down-right; the
+// shadow region (outside the square) is dark and semi-opaque, far stays empty.
+#[test]
+fn layer_drop_shadow_offsets_behind() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping layer_drop_shadow_offsets_behind");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(16, 16);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    let mut buf = Vec::new();
+    for y in 0..16 {
+        for x in 0..16 {
+            let px = if (6..10).contains(&x) && (6..10).contains(&y) {
+                [1.0, 1.0, 1.0, 1.0]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            };
+            for &c in &px {
+                buf.extend_from_slice(&half::f16::from_f32(c).to_le_bytes());
+            }
+        }
+    }
+    gpu.upload_layer(&queue, l0, &buf);
+
+    let order = vec![LayerDraw {
+        id: l0,
+        opacity: 1.0,
+        blend: 0,
+        visible: true,
+        adjust_kind: 0,
+        adjust: [0.0; 4],
+        has_blend_if: false,
+        blend_if: [0.0, 1.0, 0.0, 1.0],
+        clipped: false,
+        has_stroke: false,
+        stroke_color: [0.0; 4],
+        stroke_width: 0.0,
+        has_shadow: true,
+        shadow_color: [0.0, 0.0, 0.0, 0.8], // black, mostly opaque
+        shadow_offset: [4.0 / 16.0, 4.0 / 16.0], // down-right ~4px
+        shadow_blur: 2.0 / 16.0,
+    }];
+    let pp = gpu.composite_now(&device, &queue, &order);
+    // (12,12): square shifted +4 lands here, outside the square itself.
+    let shadow = gpu
+        .read_composite_pixel(&device, &queue, pp, 12, 12)
+        .unwrap();
+    let far = gpu.read_composite_pixel(&device, &queue, pp, 1, 1).unwrap();
+    assert!(
+        shadow[3] > 0.2 && shadow[0] < 0.3,
+        "dark offset shadow present: {shadow:?}"
+    );
+    assert!(far[3] < 0.1, "far corner stays empty: {far:?}");
 }
 
 // A layer mask (0 on the left half) hides those pixels in the composite.
@@ -697,6 +812,10 @@ fn layer_mask_hides() {
         has_stroke: false,
         stroke_color: [0.0; 4],
         stroke_width: 0.0,
+        has_shadow: false,
+        shadow_color: [0.0; 4],
+        shadow_offset: [0.0; 2],
+        shadow_blur: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();

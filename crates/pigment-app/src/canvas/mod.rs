@@ -39,6 +39,11 @@ pub struct LayerDraw {
     pub has_stroke: bool,
     pub stroke_color: [f32; 4],
     pub stroke_width: f32, // uv units
+    /// Drop-shadow layer style.
+    pub has_shadow: bool,
+    pub shadow_color: [f32; 4],
+    pub shadow_offset: [f32; 2], // uv units
+    pub shadow_blur: f32,        // uv units
 }
 
 /// A selection operation requested by the app for this frame.
@@ -133,6 +138,10 @@ struct CompositeParams {
     blend_if: [f32; 4],
     /// Stroke color (straight, premultiplied at use): [r, g, b, a].
     stroke_color: [f32; 4],
+    has_shadow: u32,        // drop-shadow layer style
+    shadow_blur: f32,       // shadow softness radius, uv units
+    shadow_off: [f32; 2],   // shadow offset, uv units
+    shadow_color: [f32; 4], // straight rgba
 }
 
 impl CompositeParams {
@@ -152,6 +161,10 @@ impl CompositeParams {
             stroke_w: 0.0,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             stroke_color: [0.0; 4],
+            has_shadow: 0,
+            shadow_blur: 0.0,
+            shadow_off: [0.0; 2],
+            shadow_color: [0.0; 4],
         }
     }
 }

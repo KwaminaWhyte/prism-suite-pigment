@@ -175,6 +175,12 @@ impl CanvasGpu {
                 p.stroke_color = l.stroke_color;
                 p.stroke_w = l.stroke_width;
             }
+            if l.has_shadow {
+                p.has_shadow = 1;
+                p.shadow_color = l.shadow_color;
+                p.shadow_off = l.shadow_offset;
+                p.shadow_blur = l.shadow_blur;
+            }
             if self.xform_layer == Some(l.id) {
                 p.has_xform = 1;
                 p.m = self.xform_m;

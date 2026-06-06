@@ -435,6 +435,41 @@ impl eframe::App for PigmentApp {
                         });
 
                         ui.separator();
+                        egui::CollapsingHeader::new("Layer style: Drop shadow").show(ui, |ui| {
+                            let id = self.active_id();
+                            let mut on = self.layer_shadows.contains_key(&id);
+                            if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                                if on {
+                                    self.layer_shadows
+                                        .insert(id, ([0.0, 0.0, 0.0, 0.7], [6.0, 6.0], 6.0));
+                                } else {
+                                    self.layer_shadows.remove(&id);
+                                }
+                                self.force_composite = true;
+                            }
+                            if let Some((color, off, blur)) = self.layer_shadows.get_mut(&id) {
+                                let mut rgba = *color;
+                                if ui.color_edit_button_rgba_premultiplied(&mut rgba).changed() {
+                                    *color = rgba;
+                                    self.force_composite = true;
+                                }
+                                let mut ch = false;
+                                ch |= ui
+                                    .add(egui::Slider::new(&mut off[0], -50.0..=50.0).text("dx"))
+                                    .changed();
+                                ch |= ui
+                                    .add(egui::Slider::new(&mut off[1], -50.0..=50.0).text("dy"))
+                                    .changed();
+                                ch |= ui
+                                    .add(egui::Slider::new(blur, 0.0..=40.0).text("blur px"))
+                                    .changed();
+                                if ch {
+                                    self.force_composite = true;
+                                }
+                            }
+                        });
+
+                        ui.separator();
                         egui::CollapsingHeader::new("Channels").show(ui, |ui| {
                             let names = with_gpu(frame, |gpu, _, _| gpu.channel_names())
                                 .unwrap_or_default();

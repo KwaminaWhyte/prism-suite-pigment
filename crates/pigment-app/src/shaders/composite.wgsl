@@ -17,6 +17,10 @@ struct Params {
     stroke_w: f32, // outer-stroke half-width, uv units
     blend_if: vec4<f32>, // this_black, this_white, under_black, under_white
     stroke_color: vec4<f32>, // straight rgba
+    has_shadow: u32,
+    shadow_blur: f32,
+    shadow_off: vec2<f32>,
+    shadow_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -257,6 +261,30 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let st = vec4<f32>(params.stroke_color.rgb * sa_pre, sa_pre); // premultiplied stroke
         // Layer over stroke (stroke shows where the layer's own alpha is low).
         s = vec4<f32>(s.rgb + st.rgb * (1.0 - s.a), s.a + st.a * (1.0 - s.a));
+    }
+
+    // Drop shadow: a blurred, offset copy of the layer alpha, drawn behind.
+    if params.has_shadow != 0u {
+        var acc = textureSampleLevel(
+            layer_tex, samp,
+            clamp(luv - params.shadow_off, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0
+        ).a;
+        var n = 1.0;
+        for (var k = 0; k < 16; k = k + 1) {
+            let ang = 6.2831853 * f32(k) / 16.0;
+            let dir = vec2<f32>(cos(ang), sin(ang));
+            for (var rr = 0; rr < 2; rr = rr + 1) {
+                let r = params.shadow_blur * (f32(rr) + 1.0) / 2.0;
+                let suv = clamp(luv - params.shadow_off + dir * r, vec2<f32>(0.0), vec2<f32>(1.0));
+                acc = acc + textureSampleLevel(layer_tex, samp, suv, 0.0).a;
+                n = n + 1.0;
+            }
+        }
+        let cov = (acc / n) * (params.opacity * mask);
+        let sha_a = params.shadow_color.a * cov;
+        let sha = vec4<f32>(params.shadow_color.rgb * sha_a, sha_a); // premultiplied
+        // Composite the styled layer over the shadow.
+        s = vec4<f32>(s.rgb + sha.rgb * (1.0 - s.a), s.a + sha.a * (1.0 - s.a));
     }
 
     // Clipping mask: gate the source by the base (below) layer's alpha.
