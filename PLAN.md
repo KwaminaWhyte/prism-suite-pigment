@@ -170,14 +170,14 @@ pigment/
 
 **Deferred (polish):** Curves spline-editor UI (the monotone-cubic LUT builder exists in `pigment_core::curve`, only the draggable widget + a Curves adjustment kind remain); Color Balance / per-channel curves; clipping & group masks; layer styles (stroke/shadow/glow); motion blur / noise.
 
-### Phase 4 — Text, vector, smart objects  *(general-purpose 1.0)*
-- [ ] Text layers: `cosmic-text` editable buffer → `glyphon` atlas → layer tile cache; font/size/color/align/spacing
-- [ ] Vector shapes: rectangle, ellipse, polygon, line; `lyon` tessellation
-- [ ] Pen tool: `kurbo` bezier path model, anchor/handle editing, path panel
-- [ ] Boolean shape ops (`i_overlay`); vector masks
-- [ ] Smart objects: embedded non-destructive content re-rasterized on transform
-- [ ] Gradient tool + gradient editor; pattern fill
-- [ ] **DoD:** text + vector + smart objects, editable after creation
+### Phase 4 — Text, vector, smart objects  *(MOSTLY COMPLETE)*
+- [x] Text layers (`cosmic-text` rasterizer → layer texture): editable text/size/color/align, re-rasterized on edit
+- [x] Vector shape layers: rectangle + ellipse (drag-create), editable fill color, re-rasterized (`pigment_core::shape`, AA)
+- [x] Gradient tool: drag a foreground→transparent linear gradient, composited over the active layer
+- [x] Generated layers stay editable after creation (`sync_generated_layers` re-rasterizes on def change)
+- [x] Tests: `pigment_io::text` + `pigment_core::shape` rasterizers
+- [x] **DoD (partial):** text + vector editable after creation ✓; smart objects deferred
+- [ ] **Deferred:** pen tool (`kurbo` bezier + handles), polygon/line shapes, boolean shape ops (`i_overlay`), vector masks, smart objects, gradient editor (multi-stop) + pattern fill. Foundations present: `lyon`/`kurbo`/`i_overlay` in the stack; `curve` LUT for gradient stops.
 
 ### Phase 5 — Pro features
 - [ ] Color management: ICC load/embed (`lcms2`), working-space conversion, soft-proofing, CMYK, 16/32-bit per channel, HDR/EXR
