@@ -80,10 +80,13 @@ struct GpuLayer {
     view: wgpu::TextureView,
 }
 
-/// A full-layer pixel snapshot held GPU-side for one undo step.
+/// A region pixel snapshot held GPU-side for one undo step. `rect` is the
+/// `[x, y, w, h]` sub-region of the layer the snapshot covers (region-COW: a
+/// stroke only snapshots the tiles/area it touched, not the whole layer).
 struct Snapshot {
     id: LayerId,
     tex: wgpu::Texture,
+    rect: [u32; 4],
     label: String,
 }
 
@@ -147,9 +150,13 @@ pub struct CanvasGpu {
     dab_instances: wgpu::Buffer,
     dab_capacity: u64,
 
-    // Undo/redo: GPU-side full-layer snapshots (tile-COW diffs come with tiling).
+    // Undo/redo: region snapshots. A stroke copies its layer to `stroke_pre` at
+    // start, then on commit extracts only the dirty sub-rect into the stack.
     undo_stack: Vec<Snapshot>,
     redo_stack: Vec<Snapshot>,
+    stroke_pre: Option<wgpu::Texture>,
+    stroke_owner: Option<LayerId>,
+    stroke_label: String,
 
     // Display.
     display_pipeline: wgpu::RenderPipeline,
@@ -337,6 +344,9 @@ impl CanvasGpu {
             dab_capacity,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            stroke_pre: None,
+            stroke_owner: None,
+            stroke_label: String::new(),
             display_pipeline,
             display_bgl,
             display_uniform,
@@ -365,6 +375,8 @@ impl CanvasGpu {
         self.wet = Some(make_target(device, size, "composite.wet"));
         self.wet_owner = None;
         self.composite_valid = false;
+        self.stroke_owner = None;
+        self.stroke_pre = None;
         self.layers.clear(); // new document
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -528,14 +540,10 @@ impl CanvasGpu {
         self.readback_pixel(device, queue, self.target_tex(is_ping)?, x, y)
     }
 
-    fn new_snapshot_tex(&self, device: &wgpu::Device) -> wgpu::Texture {
+    fn new_region_tex(&self, device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("undo.snapshot"),
-            size: wgpu::Extent3d {
-                width: self.canvas_size.width.max(1),
-                height: self.canvas_size.height.max(1),
-                depth_or_array_layers: 1,
-            },
+            label: Some("undo.region"),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -545,12 +553,14 @@ impl CanvasGpu {
         })
     }
 
-    /// Copy a layer's pixels into a fresh GPU texture (one undo unit).
-    fn snapshot_of(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId, label: &str) -> Option<Snapshot> {
-        let layer = self.layers.get(&id)?;
-        let tex = self.new_snapshot_tex(device);
-        copy_tex(encoder, &layer.tex, &tex, self.canvas_size);
-        Some(Snapshot { id, tex, label: label.to_string() })
+    /// Clamp a requested `[x, y, w, h]` to the canvas bounds.
+    fn clamp_rect(&self, rect: [u32; 4]) -> [u32; 4] {
+        let (cw, ch) = (self.canvas_size.width, self.canvas_size.height);
+        let x = rect[0].min(cw.saturating_sub(1));
+        let y = rect[1].min(ch.saturating_sub(1));
+        let w = rect[2].clamp(1, cw - x);
+        let h = rect[3].clamp(1, ch - y);
+        [x, y, w, h]
     }
 
     fn push_undo(&mut self, snap: Snapshot) {
@@ -561,21 +571,46 @@ impl CanvasGpu {
         self.redo_stack.clear();
     }
 
-    /// Push the active layer's current pixels onto the undo stack (stroke start).
+    /// Begin a command: copy the layer's current pixels into the transient
+    /// pre-stroke buffer. The undo entry (just the dirty region) is taken at
+    /// [`commit_command`].
     pub fn begin_command(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId, label: &str) {
-        if let Some(snap) = self.snapshot_of(device, encoder, id, label) {
-            self.push_undo(snap);
+        if !self.layers.contains_key(&id) {
+            return;
         }
+        let (w, h) = (self.canvas_size.width, self.canvas_size.height);
+        if self.stroke_pre.is_none() {
+            self.stroke_pre = Some(self.new_region_tex(device, w, h));
+        }
+        let pre = self.stroke_pre.as_ref().unwrap();
+        let layer = self.layers.get(&id).unwrap();
+        copy_tex(encoder, &layer.tex, pre, self.canvas_size);
+        self.stroke_owner = Some(id);
+        self.stroke_label = label.to_string();
     }
 
-    /// Snapshot using a self-contained encoder (for callers outside the frame
-    /// callback, e.g. bucket fill).
+    /// Commit the open command, snapshotting only `rect` (the touched region)
+    /// from the pre-stroke buffer onto the undo stack.
+    pub fn commit_command(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, rect: [u32; 4]) {
+        let Some(id) = self.stroke_owner.take() else { return };
+        let Some(pre) = self.stroke_pre.as_ref() else { return };
+        let [x, y, w, h] = self.clamp_rect(rect);
+        let region = self.new_region_tex(device, w, h);
+        copy_region(encoder, pre, [x, y], &region, [0, 0], [w, h]);
+        let label = std::mem::take(&mut self.stroke_label);
+        self.push_undo(Snapshot { id, tex: region, rect: [x, y, w, h], label });
+    }
+
+    /// Snapshot a whole-layer command immediately (own encoder), for callers
+    /// outside the frame callback such as bucket fill.
     pub fn begin_command_now(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId, label: &str) {
+        let Some(layer) = self.layers.get(&id) else { return };
+        let (w, h) = (self.canvas_size.width, self.canvas_size.height);
+        let region = self.new_region_tex(device, w, h);
         let mut enc = device.create_command_encoder(&Default::default());
-        if let Some(snap) = self.snapshot_of(device, &mut enc, id, label) {
-            queue.submit([enc.finish()]);
-            self.push_undo(snap);
-        }
+        copy_region(&mut enc, &layer.tex, [0, 0], &region, [0, 0], [w, h]);
+        queue.submit([enc.finish()]);
+        self.push_undo(Snapshot { id, tex: region, rect: [0, 0, w, h], label: label.to_string() });
     }
 
     /// Labels of pending undo steps (oldest→newest) and redo steps (next→furthest).
@@ -588,16 +623,17 @@ impl CanvasGpu {
     fn restore(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, from_undo: bool) {
         let snap = if from_undo { self.undo_stack.pop() } else { self.redo_stack.pop() };
         let Some(snap) = snap else { return };
-        if let Some(layer) = self.layers.get(&snap.id) {
-            let cur = self.new_snapshot_tex(device);
-            copy_tex(encoder, &layer.tex, &cur, self.canvas_size);
-            let saved = Snapshot { id: snap.id, tex: cur, label: snap.label.clone() };
-            if from_undo {
-                self.redo_stack.push(saved);
-            } else {
-                self.undo_stack.push(saved);
-            }
-            copy_tex(encoder, &snap.tex, &layer.tex, self.canvas_size);
+        let Some(layer) = self.layers.get(&snap.id) else { return };
+        let [x, y, w, h] = snap.rect;
+        // Save the layer's current region to the opposite stack, then restore.
+        let cur = self.new_region_tex(device, w, h);
+        copy_region(encoder, &layer.tex, [x, y], &cur, [0, 0], [w, h]);
+        copy_region(encoder, &snap.tex, [0, 0], &layer.tex, [x, y], [w, h]);
+        let saved = Snapshot { id: snap.id, tex: cur, rect: snap.rect, label: snap.label };
+        if from_undo {
+            self.redo_stack.push(saved);
+        } else {
+            self.undo_stack.push(saved);
         }
     }
 
@@ -891,6 +927,32 @@ fn copy_tex(encoder: &mut wgpu::CommandEncoder, src: &wgpu::Texture, dst: &wgpu:
     );
 }
 
+/// GPU-side copy of a `[w,h]` region from `src@src_xy` to `dst@dst_xy`.
+fn copy_region(
+    encoder: &mut wgpu::CommandEncoder,
+    src: &wgpu::Texture,
+    src_xy: [u32; 2],
+    dst: &wgpu::Texture,
+    dst_xy: [u32; 2],
+    wh: [u32; 2],
+) {
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: src,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: src_xy[0], y: src_xy[1], z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: dst,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: dst_xy[0], y: dst_xy[1], z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d { width: wh[0].max(1), height: wh[1].max(1), depth_or_array_layers: 1 },
+    );
+}
+
 /// A clear-to-transparent color attachment for `view` (helper for inline descriptors).
 fn clear_attachment(view: &wgpu::TextureView) -> wgpu::RenderPassColorAttachment<'_> {
     wgpu::RenderPassColorAttachment {
@@ -959,9 +1021,12 @@ pub struct CanvasPaint {
     pub active_id: LayerId,
     pub dabs: Vec<Dab>,
     pub erase: bool,
-    /// Set on the first frame of a stroke — snapshots the layer for undo.
+    /// Set on the first frame of a stroke — copies the layer to the pre-stroke buffer.
     pub begin_command: bool,
     pub command_label: String,
+    /// Set on the last frame of a stroke — snapshots `dirty_rect` for undo.
+    pub commit_command: bool,
+    pub dirty_rect: [u32; 4],
     pub undo: u32,
     pub redo: u32,
     // Wet brush stroke lifecycle.
@@ -1004,6 +1069,9 @@ impl CallbackTrait for CanvasPaint {
         gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs, self.erase, self.paint_into_wet);
         if self.wet_end {
             gpu.wet_end(device, queue, encoder);
+        }
+        if self.commit_command {
+            gpu.commit_command(device, encoder, self.dirty_rect);
         }
         // Recomposite only when the document changed; pan/zoom alone reuse the
         // last composite (only the display pass re-runs each frame).
@@ -1093,21 +1161,25 @@ mod gpu_tests {
         let mut enc = device.create_command_encoder(&Default::default());
         gpu.begin_command(&device, &mut enc, l0, "test");
         gpu.wet_begin(&mut enc, l0, 1.0);
-        let dab = Dab { center: [4.0, 4.0], radius: 8.0, hardness: 0.95, color: [0.0, 0.0, 1.0, 1.0] };
+        let dab = Dab { center: [2.0, 2.0], radius: 2.5, hardness: 0.95, color: [0.0, 0.0, 1.0, 1.0] };
         gpu.paint_dabs(&device, &queue, &mut enc, l0, &[dab], false, true);
         gpu.wet_end(&device, &queue, &mut enc);
+        // Region-COW: only snapshot the touched corner.
+        gpu.commit_command(&device, &mut enc, [0, 0, 5, 5]);
         queue.submit([enc.finish()]);
 
         let p = gpu.composite_now(&device, &queue, &order);
-        let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
-        assert!(px[2] > 0.9 && px[0] < 0.1, "baked blue at center: {px:?}");
+        let near = gpu.read_composite_pixel(&device, &queue, p, 2, 2).unwrap();
+        let far = gpu.read_composite_pixel(&device, &queue, p, 7, 7).unwrap();
+        assert!(near[2] > 0.9 && near[0] < 0.1, "baked blue at stroke: {near:?}");
+        assert!(far[0] > 0.9 && far[2] < 0.1, "far pixel untouched red: {far:?}");
 
-        // Undo restores red.
+        // Undo restores the region to red.
         let mut enc = device.create_command_encoder(&Default::default());
         gpu.undo(&device, &mut enc);
         queue.submit([enc.finish()]);
         let p = gpu.composite_now(&device, &queue, &order);
-        let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
-        assert!(px[0] > 0.9 && px[2] < 0.1, "undo back to red: {px:?}");
+        let near = gpu.read_composite_pixel(&device, &queue, p, 2, 2).unwrap();
+        assert!(near[0] > 0.9 && near[2] < 0.1, "undo back to red: {near:?}");
     }
 }

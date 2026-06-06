@@ -87,6 +87,24 @@ wet-layer/pressure, no undo yet, no tile streaming. See PLAN.md §4 Phase 1.
 Both fill and eyedropper currently sample the **active layer only** (no
 sample-all-layers yet).
 
-## Next
-Tile model + `TileCache` (replace full-canvas layer textures) + dirty-tile
-invalidation; wet-layer + pen pressure; History panel.
+### Phase 1 complete — additions
+- **Wet-layer** — brush dabs render into a `wet` texture; the compositor inserts
+  it as a synthetic pass just above its owner layer (reserved params slot) for
+  live preview; `wet_end` flattens it into the owner on pen-up. Eraser paints
+  direct (destination-out).
+- **Brush dynamics** — per-dab size scale; velocity→size taper (hardware
+  pressure unavailable: eframe doesn't expose it, octotablet has no macOS).
+- **Region-COW undo** — `begin_command` copies the layer to a transient
+  pre-stroke texture; `commit_command` extracts only the dirty `[x,y,w,h]` into
+  the undo stack. `restore` swaps regions in/out. History panel via labeled
+  snapshots; count-based multi-step undo/redo.
+- **Dirty compositing** — `composite_valid` + a layer fingerprint skip
+  recompositing when nothing changed; pan/zoom only re-run the display pass.
+- **Headless GPU test** (`canvas::gpu_tests`) — boots a real wgpu device with
+  pollster and pixel-asserts upload→composite→wet-brush→region-undo. Skips if no
+  adapter.
+
+## Next: Phase 2 — selection & transform
+Selection mask (`R16F`) + marching ants; rect/ellipse/lasso/magic-wand; feather/
+grow/shrink; move + free transform (GPU resample); crop/canvas/image size
+(`fast_image_resize`); copy/paste. See PLAN.md §4 Phase 2.

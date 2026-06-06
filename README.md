@@ -20,8 +20,8 @@ roadmap and [ARCHITECTURE.md](./ARCHITECTURE.md) for current internals.
 | Milestone | State |
 |-----------|-------|
 | Phase 0 — GPU canvas, pan/zoom, open image | ✅ done |
-| Phase 1 — tiles, layers, blend modes, brush, undo, save | 🚧 in progress |
-| Phase 2 — selection & transform | ⏳ planned |
+| Phase 1 — layers, blend modes, brush/eraser/fill, wet-layer, undo+history, save | ✅ done |
+| Phase 2 — selection & transform | 🚧 next |
 | Phase 3 — adjustments, masks, filters | ⏳ planned |
 | Phase 4 — text, vector, smart objects | ⏳ planned |
 | Phase 5 — color mgmt, PSD, AI, plugins | ⏳ planned |

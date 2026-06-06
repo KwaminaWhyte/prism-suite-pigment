@@ -100,6 +100,7 @@ pub struct PigmentApp {
 
     stroke_last: Option<egui::Vec2>,
     stroke_residual: f32,
+    stroke_dirty: Option<(egui::Vec2, egui::Vec2)>,
     wet_active: bool,
     undo_count: u32,
     redo_count: u32,
@@ -142,11 +143,40 @@ impl PigmentApp {
             needs_fit: true,
             stroke_last: None,
             stroke_residual: 0.0,
+            stroke_dirty: None,
             wet_active: false,
             undo_count: 0,
             redo_count: 0,
             force_composite: true,
             last_fingerprint: 0,
+        }
+    }
+
+    /// Grow the current stroke's dirty bounding box by a dab at `p` of radius `r`.
+    fn expand_dirty(&mut self, p: egui::Vec2, r: f32) {
+        let lo = egui::vec2(p.x - r, p.y - r);
+        let hi = egui::vec2(p.x + r, p.y + r);
+        self.stroke_dirty = Some(match self.stroke_dirty {
+            None => (lo, hi),
+            Some((a, b)) => (
+                egui::vec2(a.x.min(lo.x), a.y.min(lo.y)),
+                egui::vec2(b.x.max(hi.x), b.y.max(hi.y)),
+            ),
+        });
+    }
+
+    /// The stroke's dirty box as a clamped `[x, y, w, h]` (whole canvas if unset).
+    fn dirty_rect(&self) -> [u32; 4] {
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        match self.stroke_dirty {
+            Some((mn, mx)) => {
+                let x = mn.x.floor().clamp(0.0, w as f32) as u32;
+                let y = mn.y.floor().clamp(0.0, h as f32) as u32;
+                let rw = ((mx.x.ceil().clamp(0.0, w as f32) as u32).saturating_sub(x)).max(1);
+                let rh = ((mx.y.ceil().clamp(0.0, h as f32) as u32).saturating_sub(y)).max(1);
+                [x, y, rw, rh]
+            }
+            None => [0, 0, w, h],
         }
     }
 
@@ -622,9 +652,11 @@ impl eframe::App for PigmentApp {
 
                 let mut dabs: Vec<Dab> = Vec::new();
                 let mut begin_command = false;
+                let mut commit_command = false;
                 let mut wet_begin = false;
                 let mut wet_end = false;
                 let erase = self.tool == Tool::Eraser;
+                let dirty_radius = self.brush_size * 0.5 + 1.0; // max dab extent
                 // Brush paints full-coverage dabs into the wet layer (opacity is
                 // applied when flattening). Eraser paints directly at its strength.
                 let dab_alpha = if erase { self.brush_opacity } else { 1.0 };
@@ -642,6 +674,8 @@ impl eframe::App for PigmentApp {
                             match self.stroke_last {
                                 None => {
                                     begin_command = true;
+                                    self.stroke_dirty = None;
+                                    self.expand_dirty(cur, dirty_radius);
                                     if !erase {
                                         wet_begin = true;
                                         self.wet_active = true;
@@ -670,6 +704,7 @@ impl eframe::App for PigmentApp {
                                         }
                                         self.stroke_residual = t - dist;
                                         self.stroke_last = Some(cur);
+                                        self.expand_dirty(cur, dirty_radius);
                                     }
                                 }
                             }
@@ -682,6 +717,7 @@ impl eframe::App for PigmentApp {
                                 wet_end = true;
                                 self.wet_active = false;
                             }
+                            commit_command = true;
                             self.stroke_last = None;
                             self.stroke_residual = 0.0;
                         }
@@ -735,6 +771,8 @@ impl eframe::App for PigmentApp {
                         erase,
                         begin_command,
                         command_label: if erase { "Erase".into() } else { "Brush".into() },
+                        commit_command,
+                        dirty_rect: self.dirty_rect(),
                         undo,
                         redo,
                         wet_begin,

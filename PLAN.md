@@ -124,25 +124,26 @@ pigment/
 - [x] **DoD met:** builds, launches (Metal/wgpu 29), opens PNG/JPEG/etc, pan/zoom works, HiDPI-aware
 - [ ] *Follow-up:* migrate off egui 0.34 deprecated panel/menu aliases; screenshot/CI smoke test
 
-### Phase 1 — Tiles, layers, paint  *(MVP painting — IN PROGRESS)*
+### Phase 1 — Tiles, layers, paint  *(COMPLETE)*
 - [x] Compositor v1: GPU ping-pong, layers as `Rgba16Float` linear-premul textures, display pass (checker + sRGB encode)
-- [x] Blend modes as shaders: Normal, Multiply, Screen, Overlay, Darken, Lighten, Add (rest of the separable + HSL set: TODO)
-- [x] Layers panel: add, visibility toggle, opacity slider, blend-mode dropdown, active-layer select
+- [x] Blend modes as shaders: Normal, Multiply, Screen, Overlay, Darken, Lighten, Add (rest of the separable + HSL set: Phase 3)
+- [x] Layers panel: add, delete, reorder (▲▼), inline rename, visibility, opacity, blend-mode dropdown, active select
 - [x] Brush engine v1: arc-length dab walker, instanced soft dabs, size/hardness/opacity, color picker
-- [x] Image loads into the background layer (linear-premul f16 conversion)
-- [x] Core unit tests (color roundtrip, blend ids, tile coords)
-- [ ] **Tile model:** sparse map + `Rgba16Float` tiles + COW (`Arc`) — currently full-canvas textures (degenerate single tile)
-- [ ] `TileCache`: GPU atlas + indirection/page table; LRU residency; RAM spill
+- [x] **Wet-layer separation:** brush strokes render to a wet buffer, composited over the owner layer, flattened on pen-up (correct per-stroke opacity)
+- [x] **Brush dynamics:** velocity → size taper; per-dab modulation plumbed for a future pressure source
 - [x] Eraser (destination-out dab pipeline)
-- [x] CommandStack: undo/redo (Cmd+Z / Cmd+Shift+Z + Edit menu) via GPU-side `copy_texture_to_texture` layer snapshots, depth-capped
-- [x] Bucket fill (CPU flood fill, `pigment_core::fill`) + eyedropper (1px GPU readback)
-- [x] Layer delete / reorder (▲▼) / inline rename
-- [x] `.pigment` doc format: lz4-compressed RGBA16F layer blobs + JSON metadata (`pigment_io::document_file`); save via GPU readback, open via staged upload
-- [x] **DoD met:** multi-layer painting with blend modes, undo, save & reopen
-- [ ] Wet-layer separation (in-progress stroke buffer) + pressure (tablet via `octotablet`)
-- [ ] Dirty-tile invalidation (currently recomposite every frame)
-- [ ] Tile model + `TileCache` (replace full-canvas layer textures); tile-COW undo
-- [ ] History panel; "sample all layers" for fill/eyedropper
+- [x] Bucket fill (CPU flood fill, `pigment_core::fill`) + eyedropper (1px GPU readback); both with "sample all layers"
+- [x] CommandStack: undo/redo (Cmd+Z / Cmd+Shift+Z / menu) + **History panel** (labeled steps, click to jump)
+- [x] **Region-COW undo:** snapshots only the stroke's dirty rect, not the whole layer
+- [x] **Dirty compositing:** recomposite only when the document changes; pan/zoom reuse the last composite
+- [x] `.pigment` doc format: lz4 RGBA16F layer blobs + JSON metadata (`pigment_io::document_file`); save via GPU readback, open via staged upload
+- [x] Image loads into the background layer (linear-premul f16 conversion)
+- [x] Tests: core unit (color/blend/tile/fill) + io round-trip + **headless GPU test** (upload→composite→wet-brush→region-undo, pixel-asserted)
+- [x] **DoD met:** multi-layer painting + blend + wet strokes + undo + save/reopen
+
+**Deferred to later phases (rationale):**
+- *GPU sparse-virtual-texture streaming* (atlas + page table + RAM/disk spill for docs > VRAM) → **Phase 5** "out-of-core huge docs". Layers are currently one full-canvas `Rgba16Float` texture each (degenerate single tile); dirty tracking is frame-level + region-COW. Streaming is a large self-contained perf subsystem that belongs with its Phase 5 sibling.
+- *Hardware stylus pressure/tilt* → platform-blocked: eframe/egui doesn't surface pen pressure and `octotablet` has no macOS backend. Velocity dynamics stand in; per-dab modulation is ready for a raw-winit/`octotablet` source.
 
 ### Phase 2 — Selection & transform
 - [ ] Selection mask as `R16F` GPU texture; marching-ants overlay
