@@ -466,16 +466,19 @@ impl eframe::App for PigmentApp {
             });
         });
 
-        egui::SidePanel::left("tools").exact_width(52.0).show_inside(root, |ui| {
+        egui::SidePanel::left("tools").exact_width(64.0).show_inside(root, |ui| {
             ui.add_space(4.0);
-            for (tool, glyph) in [
-                (Tool::Move, "✋"),
-                (Tool::Brush, "🖌"),
-                (Tool::Eraser, "▱"),
-                (Tool::Fill, "🪣"),
-                (Tool::Eyedropper, "⛏"),
+            for (tool, label) in [
+                (Tool::Move, "Pan"),
+                (Tool::Brush, "Brush"),
+                (Tool::Eraser, "Erase"),
+                (Tool::Fill, "Fill"),
+                (Tool::Eyedropper, "Pick"),
             ] {
-                if ui.selectable_label(self.tool == tool, glyph).clicked() {
+                if ui
+                    .add_sized([56.0, 24.0], egui::SelectableLabel::new(self.tool == tool, label))
+                    .clicked()
+                {
                     self.tool = tool;
                 }
             }
@@ -507,14 +510,14 @@ impl eframe::App for PigmentApp {
                 .show(ui, |ui| {
                     // Future states (redoable), furthest first.
                     for (i, l) in redos.iter().enumerate().rev() {
-                        if ui.small_button(format!("↷ {l}")).clicked() {
+                        if ui.small_button(format!("redo  {l}")).clicked() {
                             self.redo_count += (i + 1) as u32;
                         }
                     }
-                    ui.label("● now");
+                    ui.label("—— now ——");
                     // Past states (undoable), newest first.
                     for (i, l) in undos.iter().rev().enumerate() {
-                        if ui.small_button(format!("↶ {l}")).clicked() {
+                        if ui.small_button(format!("undo  {l}")).clicked() {
                             self.undo_count += (i + 1) as u32;
                         }
                     }
@@ -523,7 +526,7 @@ impl eframe::App for PigmentApp {
             ui.separator();
             ui.horizontal(|ui| {
                 ui.heading("Layers");
-                if ui.button("＋").on_hover_text("New layer").clicked() {
+                if ui.button("+ New").on_hover_text("New layer").clicked() {
                     let id = self.doc.layers.add_raster(format!("Layer {}", self.doc.layers.layers.len()));
                     self.doc.active_layer = Some(id);
                 }
@@ -545,20 +548,21 @@ impl eframe::App for PigmentApp {
                     .inner_margin(4.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut layer.visible, "");
-                            ui.add(egui::TextEdit::singleline(&mut layer.name).desired_width(110.0));
-                            if ui.small_button("▲").clicked() {
+                            ui.checkbox(&mut layer.visible, "")
+                                .on_hover_text("Visible");
+                            ui.add(egui::TextEdit::singleline(&mut layer.name).desired_width(96.0));
+                            if ui.small_button("Up").clicked() {
                                 action = LayerAction::MoveUp(id);
                             }
-                            if ui.small_button("▼").clicked() {
+                            if ui.small_button("Dn").clicked() {
                                 action = LayerAction::MoveDown(id);
                             }
-                            if ui.small_button("🗑").clicked() {
+                            if ui.small_button("Del").clicked() {
                                 action = LayerAction::Delete(id);
                             }
                         });
                         ui.horizontal(|ui| {
-                            if ui.selectable_label(is_active, "●").clicked() {
+                            if ui.selectable_label(is_active, "active").clicked() {
                                 self.doc.active_layer = Some(id);
                             }
                             egui::ComboBox::from_id_salt(("blend", id.0))
