@@ -8,6 +8,7 @@ use eframe::wgpu;
 use half::f16;
 use pigment_core::color::{linear_to_srgb, srgb_to_linear};
 use pigment_core::fill::flood_fill_mask;
+use pigment_core::histogram::{self, Histogram};
 use pigment_core::raster::{self, CombineMode};
 use pigment_core::adjust::Adjustment;
 use pigment_core::{BlendMode, Document, Layer, LayerId, LayerKind, Size};
@@ -148,6 +149,8 @@ pub struct PigmentApp {
     filter_radius: f32,
     filter_amount: f32,
     filter_block: f32,
+
+    hist: Option<Histogram>,
 }
 
 /// Build the uv-space layer-from-canvas affine for a translate + uniform scale
@@ -223,6 +226,20 @@ impl PigmentApp {
             filter_radius: 4.0,
             filter_amount: 1.0,
             filter_block: 8.0,
+            hist: None,
+        }
+    }
+
+    fn refresh_histogram(&mut self, frame: &mut eframe::Frame) {
+        let order = self.layer_order();
+        let comp = with_gpu(frame, |gpu, d, q| {
+            let p = gpu.composite_now(d, q, &order);
+            gpu.read_composite(d, q, p)
+        })
+        .flatten();
+        self.force_composite = true;
+        if let Some(b) = comp {
+            self.hist = Some(histogram::histogram(&f16_bytes_to_f32(&b), 256));
         }
     }
 
@@ -1045,6 +1062,29 @@ impl eframe::App for PigmentApp {
             if matches!(self.tool, Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand) {
                 ui.label("Shift: add · Alt: subtract.");
             }
+
+            ui.separator();
+            egui::CollapsingHeader::new("Histogram").show(ui, |ui| {
+                if ui.button("Refresh").clicked() {
+                    self.refresh_histogram(frame);
+                }
+                if let Some(h) = &self.hist {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(ui.available_width(), 64.0), egui::Sense::hover());
+                    let painter = ui.painter_at(rect);
+                    painter.rect_filled(rect, 2.0, egui::Color32::from_gray(18));
+                    let max = h.luma.iter().copied().max().unwrap_or(1).max(1) as f32;
+                    let n = h.luma.len().max(1);
+                    for (i, &c) in h.luma.iter().enumerate() {
+                        let x = rect.left() + rect.width() * i as f32 / n as f32;
+                        let bh = rect.height() * (c as f32 / max);
+                        painter.line_segment(
+                            [egui::pos2(x, rect.bottom()), egui::pos2(x, rect.bottom() - bh)],
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(200)),
+                        );
+                    }
+                }
+            });
 
             ui.separator();
             let (undos, redos) = with_gpu(frame, |gpu, _, _| gpu.history_labels()).unwrap_or_default();
