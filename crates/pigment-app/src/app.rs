@@ -9,6 +9,7 @@ use pigment_core::fill::flood_fill_mask;
 use pigment_core::raster::{self, CombineMode};
 use pigment_core::{BlendMode, Document, Layer, LayerId, Size};
 use pigment_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
+use pigment_io::resize::{resize_rgba_f32, Quality};
 use pigment_io::LoadedImage;
 
 use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTransform};
@@ -129,6 +130,12 @@ pub struct PigmentApp {
     xform_active: bool,
     xform_translate: egui::Vec2, // document px
     xform_scale: f32,
+
+    // Clipboard (full-canvas RGBA f32, selection-masked) + resize dialog state.
+    clipboard: Option<Vec<f32>>,
+    clipboard_size: Size,
+    resize_w: u32,
+    resize_h: u32,
 }
 
 /// Build the uv-space layer-from-canvas affine for a translate + uniform scale
@@ -195,7 +202,166 @@ impl PigmentApp {
             xform_active: false,
             xform_translate: egui::Vec2::ZERO,
             xform_scale: 1.0,
+            clipboard: None,
+            clipboard_size: Size::new(1, 1),
+            resize_w: 1280,
+            resize_h: 800,
         }
+    }
+
+    /// Read every layer to CPU f32, map each through `map`, recreate the canvas
+    /// at `new_size`, and re-upload. Used by resize/canvas/crop.
+    fn rebuild_document(&mut self, frame: &mut eframe::Frame, new_size: Size, map: impl Fn(&[f32]) -> Vec<f32>) {
+        let ids: Vec<LayerId> = self.doc.layers.layers.iter().map(|l| l.id).collect();
+        let layers_px = with_gpu(frame, |gpu, d, q| {
+            ids.iter()
+                .filter_map(|id| gpu.read_layer(d, q, *id).map(|b| (*id, f16_bytes_to_f32(&b))))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+        let mapped: Vec<(LayerId, Vec<u8>)> =
+            layers_px.iter().map(|(id, px)| (*id, f32_to_f16_bytes(&map(px)))).collect();
+        self.doc.size = new_size;
+        with_gpu(frame, |gpu, d, q| {
+            gpu.ensure_canvas(d, new_size);
+            for (id, bytes) in &mapped {
+                gpu.ensure_layer(d, *id);
+                gpu.upload_layer(q, *id, bytes);
+            }
+        });
+        self.selection_active = false;
+        self.force_composite = true;
+        self.needs_fit = true;
+    }
+
+    fn resize_image(&mut self, frame: &mut eframe::Frame, nw: u32, nh: u32) {
+        let old = self.doc.size;
+        let q = if nw < old.width { Quality::Lanczos3 } else { Quality::Bicubic };
+        self.rebuild_document(frame, Size::new(nw, nh), move |px| {
+            resize_rgba_f32(px, old.width, old.height, nw, nh, q)
+        });
+    }
+
+    fn resize_canvas(&mut self, frame: &mut eframe::Frame, nw: u32, nh: u32) {
+        let old = self.doc.size;
+        self.rebuild_document(frame, Size::new(nw, nh), move |px| {
+            reposition(px, old.width, old.height, nw, nh, 0, 0)
+        });
+    }
+
+    fn crop_to_selection(&mut self, frame: &mut eframe::Frame) {
+        if !self.selection_active {
+            return;
+        }
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let sel = self.read_selection(frame);
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0u32, 0u32);
+        for y in 0..h {
+            for x in 0..w {
+                if sel[(y * w + x) as usize] > 0.5 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let (rw, rh, ox, oy) = (x1 - x0, y1 - y0, x0 as i32, y0 as i32);
+        self.rebuild_document(frame, Size::new(rw, rh), move |px| {
+            reposition(px, w, h, rw, rh, ox, oy)
+        });
+    }
+
+    fn flip_active(&mut self, frame: &mut eframe::Frame, horizontal: bool) {
+        let active = self.active_id();
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, "Flip");
+            if let Some(b) = gpu.read_layer(d, q, active) {
+                let f = flip(&f16_bytes_to_f32(&b), w, h, horizontal);
+                gpu.upload_layer(q, active, &f32_to_f16_bytes(&f));
+            }
+        });
+        self.force_composite = true;
+    }
+
+    /// Copy the active layer (masked by the selection) into the clipboard.
+    fn copy_selection(&mut self, frame: &mut eframe::Frame) {
+        let active = self.active_id();
+        let n = (self.doc.size.width * self.doc.size.height) as usize;
+        let has_sel = self.selection_active;
+        let res = with_gpu(frame, |gpu, d, q| {
+            let px = gpu.read_layer(d, q, active)?;
+            let sel = if has_sel { gpu.read_selection(d, q) } else { None };
+            Some((f16_bytes_to_f32(&px), sel))
+        })
+        .flatten();
+        let Some((mut px, sel)) = res else { return };
+        if let Some(s) = sel {
+            for i in 0..n {
+                let a = s[i];
+                for c in 0..4 {
+                    px[i * 4 + c] *= a;
+                }
+            }
+        }
+        self.clipboard = Some(px);
+        self.clipboard_size = self.doc.size;
+    }
+
+    fn cut_selection(&mut self, frame: &mut eframe::Frame) {
+        self.copy_selection(frame);
+        if !self.selection_active {
+            return;
+        }
+        let active = self.active_id();
+        let n = (self.doc.size.width * self.doc.size.height) as usize;
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, "Cut");
+            let (Some(b), Some(sel)) = (gpu.read_layer(d, q, active), gpu.read_selection(d, q)) else {
+                return;
+            };
+            let mut px = f16_bytes_to_f32(&b);
+            for i in 0..n {
+                if sel[i] > 0.5 {
+                    for c in 0..4 {
+                        px[i * 4 + c] = 0.0;
+                    }
+                }
+            }
+            gpu.upload_layer(q, active, &f32_to_f16_bytes(&px));
+        });
+        self.force_composite = true;
+    }
+
+    fn paste(&mut self, frame: &mut eframe::Frame) {
+        let Some(mut cb) = self.clipboard.clone() else { return };
+        if self.clipboard_size != self.doc.size {
+            cb = reposition(
+                &cb,
+                self.clipboard_size.width,
+                self.clipboard_size.height,
+                self.doc.size.width,
+                self.doc.size.height,
+                0,
+                0,
+            );
+        }
+        let id = self.doc.layers.add_raster("Pasted");
+        self.doc.active_layer = Some(id);
+        with_gpu(frame, |gpu, d, q| {
+            gpu.ensure_layer(d, id);
+            gpu.upload_layer(q, id, &f32_to_f16_bytes(&cb));
+        });
+        self.force_composite = true;
+    }
+
+    fn layer_from_selection(&mut self, frame: &mut eframe::Frame) {
+        self.copy_selection(frame);
+        self.paste(frame);
     }
 
     /// Read the current GPU selection mask (zeros if none active).
@@ -547,6 +713,38 @@ fn shape_mask(rect: [f32; 4], ellipse: bool, w: u32, h: u32) -> Vec<f32> {
     m
 }
 
+/// Copy a `dw`x`dh` window of an RGBA-f32 image, sampling src at (x+ox, y+oy);
+/// out-of-bounds reads are transparent. Used for crop and canvas resize.
+fn reposition(src: &[f32], sw: u32, sh: u32, dw: u32, dh: u32, ox: i32, oy: i32) -> Vec<f32> {
+    let mut dst = vec![0.0; (dw * dh * 4) as usize];
+    for y in 0..dh {
+        for x in 0..dw {
+            let sx = x as i32 + ox;
+            let sy = y as i32 + oy;
+            if sx >= 0 && sx < sw as i32 && sy >= 0 && sy < sh as i32 {
+                let si = ((sy as u32 * sw + sx as u32) * 4) as usize;
+                let di = ((y * dw + x) * 4) as usize;
+                dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            }
+        }
+    }
+    dst
+}
+
+/// Mirror an RGBA-f32 image horizontally or vertically in place-by-copy.
+fn flip(src: &[f32], w: u32, h: u32, horizontal: bool) -> Vec<f32> {
+    let mut dst = vec![0.0; src.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let (sx, sy) = if horizontal { (w - 1 - x, y) } else { (x, h - 1 - y) };
+            let si = ((sy * w + sx) * 4) as usize;
+            let di = ((y * w + x) * 4) as usize;
+            dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    dst
+}
+
 fn clamp_seed(p: egui::Vec2, size: Size) -> Option<(u32, u32)> {
     if p.x < 0.0 || p.y < 0.0 || p.x >= size.width as f32 || p.y >= size.height as f32 {
         return None;
@@ -591,6 +789,51 @@ impl eframe::App for PigmentApp {
                     }
                     if ui.button("Redo").clicked() {
                         self.redo_count += 1;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Cut").clicked() {
+                        self.cut_selection(frame);
+                        ui.close_menu();
+                    }
+                    if ui.button("Copy").clicked() {
+                        self.copy_selection(frame);
+                        ui.close_menu();
+                    }
+                    if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("Paste")).clicked() {
+                        self.paste(frame);
+                        ui.close_menu();
+                    }
+                    if ui.button("Layer from selection").clicked() {
+                        self.layer_from_selection(frame);
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Image", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut self.resize_w).range(1..=16384));
+                        ui.label("×");
+                        ui.add(egui::DragValue::new(&mut self.resize_h).range(1..=16384));
+                    });
+                    if ui.button("Resize image (resample)").clicked() {
+                        self.resize_image(frame, self.resize_w, self.resize_h);
+                        ui.close_menu();
+                    }
+                    if ui.button("Canvas size (no resample)").clicked() {
+                        self.resize_canvas(frame, self.resize_w, self.resize_h);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Crop to selection").clicked() {
+                        self.crop_to_selection(frame);
+                        ui.close_menu();
+                    }
+                    if ui.button("Flip layer horizontal").clicked() {
+                        self.flip_active(frame, true);
+                        ui.close_menu();
+                    }
+                    if ui.button("Flip layer vertical").clicked() {
+                        self.flip_active(frame, false);
                         ui.close_menu();
                     }
                 });
@@ -839,6 +1082,7 @@ impl eframe::App for PigmentApp {
                 let (mut undo, mut redo) = (self.undo_count, self.redo_count);
                 self.undo_count = 0;
                 self.redo_count = 0;
+                let (mut do_copy, mut do_cut, mut do_paste) = (false, false, false);
                 ui.input(|i| {
                     if i.modifiers.command {
                         if i.key_pressed(egui::Key::Z) {
@@ -851,8 +1095,20 @@ impl eframe::App for PigmentApp {
                         if i.key_pressed(egui::Key::Y) {
                             redo += 1;
                         }
+                        do_copy |= i.key_pressed(egui::Key::C);
+                        do_cut |= i.key_pressed(egui::Key::X);
+                        do_paste |= i.key_pressed(egui::Key::V);
                     }
                 });
+                if do_copy {
+                    self.copy_selection(frame);
+                }
+                if do_cut {
+                    self.cut_selection(frame);
+                }
+                if do_paste {
+                    self.paste(frame);
+                }
 
                 let img = egui::vec2(self.doc.size.width as f32, self.doc.size.height as f32);
                 let doc_rect =
