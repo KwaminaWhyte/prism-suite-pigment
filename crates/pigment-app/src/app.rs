@@ -96,6 +96,7 @@ pub struct PigmentApp {
 
     stroke_last: Option<egui::Vec2>,
     stroke_residual: f32,
+    wet_active: bool,
     undo_count: u32,
     redo_count: u32,
 }
@@ -132,6 +133,7 @@ impl PigmentApp {
             needs_fit: true,
             stroke_last: None,
             stroke_residual: 0.0,
+            wet_active: false,
             undo_count: 0,
             redo_count: 0,
         }
@@ -258,7 +260,7 @@ impl PigmentApp {
         self.view = ViewTransform { pan: egui::Vec2::ZERO, zoom: scale.clamp(0.02, 64.0) };
     }
 
-    fn dab_at(&self, doc_pos: egui::Vec2) -> Dab {
+    fn dab_at(&self, doc_pos: egui::Vec2, alpha: f32) -> Dab {
         let c = self.brush_color;
         Dab {
             center: [doc_pos.x, doc_pos.y],
@@ -268,7 +270,7 @@ impl PigmentApp {
                 srgb_to_linear(c.r() as f32 / 255.0),
                 srgb_to_linear(c.g() as f32 / 255.0),
                 srgb_to_linear(c.b() as f32 / 255.0),
-                self.brush_opacity,
+                alpha,
             ],
         }
     }
@@ -585,7 +587,12 @@ impl eframe::App for PigmentApp {
 
                 let mut dabs: Vec<Dab> = Vec::new();
                 let mut begin_command = false;
+                let mut wet_begin = false;
+                let mut wet_end = false;
                 let erase = self.tool == Tool::Eraser;
+                // Brush paints full-coverage dabs into the wet layer (opacity is
+                // applied when flattening). Eraser paints directly at its strength.
+                let dab_alpha = if erase { self.brush_opacity } else { 1.0 };
                 match self.tool {
                     Tool::Move => {
                         if response.dragged() {
@@ -599,7 +606,11 @@ impl eframe::App for PigmentApp {
                             match self.stroke_last {
                                 None => {
                                     begin_command = true;
-                                    dabs.push(self.dab_at(cur));
+                                    if !erase {
+                                        wet_begin = true;
+                                        self.wet_active = true;
+                                    }
+                                    dabs.push(self.dab_at(cur, dab_alpha));
                                     self.stroke_last = Some(cur);
                                     self.stroke_residual = 0.0;
                                 }
@@ -610,7 +621,7 @@ impl eframe::App for PigmentApp {
                                         let dir = seg / dist;
                                         let mut t = self.stroke_residual;
                                         while t <= dist {
-                                            dabs.push(self.dab_at(last + dir * t));
+                                            dabs.push(self.dab_at(last + dir * t, dab_alpha));
                                             t += spacing;
                                         }
                                         self.stroke_residual = t - dist;
@@ -623,6 +634,10 @@ impl eframe::App for PigmentApp {
                         if response.drag_stopped()
                             || (self.stroke_last.is_some() && response.interact_pointer_pos().is_none())
                         {
+                            if self.wet_active {
+                                wet_end = true;
+                                self.wet_active = false;
+                            }
                             self.stroke_last = None;
                             self.stroke_residual = 0.0;
                         }
@@ -665,6 +680,10 @@ impl eframe::App for PigmentApp {
                         command_label: if erase { "Erase".into() } else { "Brush".into() },
                         undo,
                         redo,
+                        wet_begin,
+                        wet_end,
+                        wet_opacity: self.brush_opacity,
+                        paint_into_wet: self.wet_active,
                     },
                 ));
             });

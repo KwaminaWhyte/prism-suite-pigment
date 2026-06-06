@@ -29,3 +29,6 @@ egui = "0.34"
 
 # Native file open/save dialogs.
 rfd = "0.15"
+
+[dev-dependencies]
+pollster = "0.4"

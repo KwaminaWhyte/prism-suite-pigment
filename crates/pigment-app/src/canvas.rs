@@ -91,6 +91,8 @@ const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const MAX_LAYERS: u64 = 64;
 const PARAMS_STRIDE: u64 = 256; // min uniform dynamic-offset alignment
 const UNDO_MAX: usize = 32;
+/// Params slot reserved for the wet stroke (last slot in the buffer).
+const WET_PARAMS_OFFSET: u32 = ((MAX_LAYERS - 1) * PARAMS_STRIDE) as u32;
 
 /// Erase blend: dst *= (1 - dab_alpha). Removes coverage.
 const ERASE_BLEND: wgpu::BlendState = wgpu::BlendState {
@@ -160,6 +162,12 @@ pub struct CanvasGpu {
     canvas_size: Size,
     ping: Option<GpuLayer>,
     pong: Option<GpuLayer>,
+
+    // In-progress brush stroke ("wet ink") composited over its owner layer and
+    // flattened on pen-up — gives correct per-stroke opacity (RESEARCH.md §4).
+    wet: Option<GpuLayer>,
+    wet_owner: Option<LayerId>,
+    wet_opacity: f32,
 }
 
 impl CanvasGpu {
@@ -331,6 +339,9 @@ impl CanvasGpu {
             canvas_size: Size::new(1, 1),
             ping: None,
             pong: None,
+            wet: None,
+            wet_owner: None,
+            wet_opacity: 1.0,
         }
     }
 
@@ -343,6 +354,8 @@ impl CanvasGpu {
         self.canvas_size = size;
         self.ping = Some(make_target(device, size, "composite.ping"));
         self.pong = Some(make_target(device, size, "composite.pong"));
+        self.wet = Some(make_target(device, size, "composite.wet"));
+        self.wet_owner = None;
         self.layers.clear(); // new document
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -587,6 +600,76 @@ impl CanvasGpu {
         self.restore(device, encoder, false);
     }
 
+    /// Begin a wet brush stroke over `owner`: clear the wet buffer.
+    pub fn wet_begin(&mut self, encoder: &mut wgpu::CommandEncoder, owner: LayerId, opacity: f32) {
+        self.wet_owner = Some(owner);
+        self.wet_opacity = opacity;
+        if let Some(wet) = self.wet.as_ref() {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("wet.clear"),
+                color_attachments: &[Some(clear_attachment(&wet.view))],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+    }
+
+    /// Flatten the wet stroke into its owner layer (pen-up) and clear it.
+    pub fn wet_end(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        let Some(owner) = self.wet_owner.take() else { return };
+        let (Some(layer), Some(wet), Some(pong)) =
+            (self.layers.get(&owner), self.wet.as_ref(), self.pong.as_ref())
+        else {
+            return;
+        };
+        queue.write_buffer(
+            &self.params_buf,
+            WET_PARAMS_OFFSET as u64,
+            bytemuck::bytes_of(&CompositeParams { opacity: self.wet_opacity, blend_mode: 0, _pad: [0; 2] }),
+        );
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("wet.flatten.bg"),
+            layout: &self.composite_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&layer.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&wet.view) },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.params_buf,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<CompositeParams>() as u64),
+                    }),
+                },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("wet.flatten"),
+                color_attachments: &[Some(clear_attachment(&pong.view))],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.composite_pipeline);
+            pass.set_bind_group(0, &bind, &[WET_PARAMS_OFFSET]);
+            pass.draw(0..3, 0..1);
+        }
+        copy_tex(encoder, &pong.tex, &layer.tex, self.canvas_size);
+        let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("wet.clear.end"),
+            color_attachments: &[Some(clear_attachment(&wet.view))],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+
     fn paint_dabs(
         &mut self,
         device: &wgpu::Device,
@@ -595,11 +678,13 @@ impl CanvasGpu {
         id: LayerId,
         dabs: &[Dab],
         erase: bool,
+        into_wet: bool,
     ) {
         if dabs.is_empty() {
             return;
         }
-        let Some(layer) = self.layers.get(&id) else { return };
+        let target = if into_wet { self.wet.as_ref() } else { self.layers.get(&id) };
+        let Some(target) = target else { return };
 
         if dabs.len() as u64 > self.dab_capacity {
             self.dab_capacity = (dabs.len() as u64).next_power_of_two();
@@ -631,7 +716,7 @@ impl CanvasGpu {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("dab.pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &layer.view,
+                view: &target.view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
@@ -662,9 +747,27 @@ impl CanvasGpu {
             let p = CompositeParams { opacity: l.opacity, blend_mode: l.blend, _pad: [0; 2] };
             queue.write_buffer(&self.params_buf, i as u64 * PARAMS_STRIDE, bytemuck::bytes_of(&p));
         }
+        if self.wet_owner.is_some() {
+            let p = CompositeParams { opacity: self.wet_opacity, blend_mode: 0, _pad: [0; 2] };
+            queue.write_buffer(&self.params_buf, WET_PARAMS_OFFSET as u64, bytemuck::bytes_of(&p));
+        }
 
         let ping = self.ping.as_ref().unwrap();
         let pong = self.pong.as_ref().unwrap();
+
+        // Ordered passes: each visible layer, plus the wet stroke just above its
+        // owner so the in-progress stroke previews at the right depth.
+        let mut passes: Vec<(&wgpu::TextureView, u32)> = Vec::new();
+        for (i, l) in visible.iter().enumerate() {
+            if let Some(layer) = self.layers.get(&l.id) {
+                passes.push((&layer.view, (i as u64 * PARAMS_STRIDE) as u32));
+                if self.wet_owner == Some(l.id) {
+                    if let Some(wet) = self.wet.as_ref() {
+                        passes.push((&wet.view, WET_PARAMS_OFFSET));
+                    }
+                }
+            }
+        }
 
         // Clear ping to transparent — the initial backdrop (LoadOp::Clear, no draw).
         {
@@ -679,8 +782,7 @@ impl CanvasGpu {
         }
 
         let mut src_is_ping = true;
-        for (i, l) in visible.iter().enumerate() {
-            let Some(layer) = self.layers.get(&l.id) else { continue };
+        for (layer_view, offset) in passes {
             let (src, dst) = if src_is_ping { (ping, pong) } else { (pong, ping) };
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("composite.bg"),
@@ -688,7 +790,7 @@ impl CanvasGpu {
                 entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src.view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&layer.view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(layer_view) },
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -708,7 +810,7 @@ impl CanvasGpu {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.composite_pipeline);
-            pass.set_bind_group(0, &bind, &[(i as u64 * PARAMS_STRIDE) as u32]);
+            pass.set_bind_group(0, &bind, &[offset]);
             pass.draw(0..3, 0..1);
             drop(pass);
             src_is_ping = !src_is_ping;
@@ -853,6 +955,11 @@ pub struct CanvasPaint {
     pub command_label: String,
     pub undo: u32,
     pub redo: u32,
+    // Wet brush stroke lifecycle.
+    pub wet_begin: bool,
+    pub wet_end: bool,
+    pub wet_opacity: f32,
+    pub paint_into_wet: bool,
 }
 
 impl CallbackTrait for CanvasPaint {
@@ -880,7 +987,13 @@ impl CallbackTrait for CanvasPaint {
         if self.begin_command {
             gpu.begin_command(device, encoder, self.active_id, &self.command_label);
         }
-        gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs, self.erase);
+        if self.wet_begin {
+            gpu.wet_begin(encoder, self.active_id, self.wet_opacity);
+        }
+        gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs, self.erase, self.paint_into_wet);
+        if self.wet_end {
+            gpu.wet_end(device, queue, encoder);
+        }
         let final_is_ping = gpu.composite(device, queue, encoder, &self.layers);
         gpu.build_display_bind_group(device, final_is_ping);
 
@@ -910,5 +1023,71 @@ impl CallbackTrait for CanvasPaint {
         render_pass.set_pipeline(&gpu.display_pipeline);
         render_pass.set_bind_group(0, bg, &[]);
         render_pass.draw(0..6, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    use super::*;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    }
+
+    /// A solid `n`x`n` buffer of linear-premultiplied RGBA16F bytes.
+    fn solid(n: u32, r: f32, g: f32, b: f32, a: f32) -> Vec<u8> {
+        let px = [r * a, g * a, b * a, a];
+        let mut o = Vec::new();
+        for _ in 0..(n * n) {
+            for &c in &px {
+                o.extend_from_slice(&half::f16::from_f32(c).to_le_bytes());
+            }
+        }
+        o
+    }
+
+    // Drives the real GPU compositor: upload -> composite -> brush(wet)+flatten
+    // -> undo, asserting pixels via readback. Skips if no GPU adapter.
+    #[test]
+    fn compositor_brush_wet_undo() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping compositor_brush_wet_undo");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+        gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
+
+        let order = vec![LayerDraw { id: l0, opacity: 1.0, blend: 0, visible: true }];
+        let p = gpu.composite_now(&device, &queue, &order);
+        let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
+        assert!(px[0] > 0.9 && px[1] < 0.1 && px[3] > 0.9, "composite red: {px:?}");
+
+        // Blue wet brush dab over the center, flattened.
+        let mut enc = device.create_command_encoder(&Default::default());
+        gpu.begin_command(&device, &mut enc, l0, "test");
+        gpu.wet_begin(&mut enc, l0, 1.0);
+        let dab = Dab { center: [4.0, 4.0], radius: 8.0, hardness: 0.95, color: [0.0, 0.0, 1.0, 1.0] };
+        gpu.paint_dabs(&device, &queue, &mut enc, l0, &[dab], false, true);
+        gpu.wet_end(&device, &queue, &mut enc);
+        queue.submit([enc.finish()]);
+
+        let p = gpu.composite_now(&device, &queue, &order);
+        let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
+        assert!(px[2] > 0.9 && px[0] < 0.1, "baked blue at center: {px:?}");
+
+        // Undo restores red.
+        let mut enc = device.create_command_encoder(&Default::default());
+        gpu.undo(&device, &mut enc);
+        queue.submit([enc.finish()]);
+        let p = gpu.composite_now(&device, &queue, &order);
+        let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
+        assert!(px[0] > 0.9 && px[2] < 0.1, "undo back to red: {px:?}");
     }
 }
