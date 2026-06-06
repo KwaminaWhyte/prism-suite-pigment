@@ -201,69 +201,86 @@ impl eframe::App for PigmentApp {
                     .show(ui, |ui| {
                         ui.add_space(6.0);
                         use crate::icons;
-                        for (tool, icon, name) in [
-                            (Tool::Move, icons::PAN, "Pan view"),
-                            (Tool::MoveLayer, icons::MOVE, "Move layer"),
-                            (Tool::Brush, icons::BRUSH, "Brush"),
-                            (Tool::Eraser, icons::ERASER, "Eraser"),
-                            (
-                                Tool::Clone,
-                                icons::CLONE,
-                                "Clone stamp (Alt-click sets source)",
-                            ),
-                            (
-                                Tool::Heal,
-                                icons::HEAL,
-                                "Healing brush (Alt-click source; heals on release)",
-                            ),
-                            (
-                                Tool::SpotHeal,
-                                icons::SPOT_HEAL,
-                                "Spot heal (auto-source; heals on release)",
-                            ),
-                            (
-                                Tool::ContentFill,
-                                icons::CONTENT_FILL,
-                                "Content-aware fill (brush region; PatchMatch on release)",
-                            ),
-                            (
-                                Tool::Dodge,
-                                icons::DODGE,
-                                "Dodge / burn — lighten, or darken with Alt (applies on release)",
-                            ),
-                            (
-                                Tool::Liquify,
-                                icons::LIQUIFY,
-                                "Liquify — push/twirl/pucker/bloat mesh warp",
-                            ),
-                            (
-                                Tool::Detail,
-                                icons::DETAIL,
-                                "Detail brush — saturate / desaturate / blur / sharpen",
-                            ),
-                            (Tool::Fill, icons::FILL, "Bucket fill"),
-                            (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
-                            (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
-                            (Tool::SelectEllipse, icons::ELLIPSE_SELECT, "Ellipse select"),
-                            (Tool::Lasso, icons::LASSO, "Lasso select"),
-                            (Tool::MagicWand, icons::MAGIC_WAND, "Magic wand"),
-                            (Tool::Transform, icons::TRANSFORM, "Transform"),
-                            (Tool::Crop, icons::CROP, "Crop"),
-                            (Tool::Text, icons::TEXT, "Text"),
-                            (Tool::ShapeRect, icons::SHAPE, "Rectangle shape"),
-                            (Tool::ShapeEllipse, icons::ELLIPSE_SELECT, "Ellipse shape"),
-                            (Tool::Gradient, icons::GRADIENT, "Gradient"),
-                        ] {
-                            let btn = egui::SelectableLabel::new(
-                                self.tool == tool,
-                                egui::RichText::new(icon).size(20.0),
-                            );
-                            if ui
-                                .add_sized([36.0, 30.0], btn)
-                                .on_hover_text(name)
-                                .clicked()
-                            {
-                                self.tool = tool;
+                        // Tool families (Affinity-style): one button per group; a
+                        // multi-tool group opens a flyout menu of its variants. The
+                        // group button shows the active tool's icon when active.
+                        type T = Tool;
+                        let groups: &[&[(Tool, &str, &str)]] = &[
+                            &[
+                                (T::Move, icons::PAN, "Pan view"),
+                                (T::MoveLayer, icons::MOVE, "Move layer"),
+                            ],
+                            &[
+                                (T::SelectRect, icons::RECT_SELECT, "Rectangle select"),
+                                (T::SelectEllipse, icons::ELLIPSE_SELECT, "Ellipse select"),
+                            ],
+                            &[(T::Lasso, icons::LASSO, "Lasso select")],
+                            &[(T::MagicWand, icons::MAGIC_WAND, "Magic wand")],
+                            &[(T::Crop, icons::CROP, "Crop")],
+                            &[(T::Transform, icons::TRANSFORM, "Transform")],
+                            &[
+                                (T::Brush, icons::BRUSH, "Brush"),
+                                (T::Eraser, icons::ERASER, "Eraser"),
+                            ],
+                            &[
+                                (T::Clone, icons::CLONE, "Clone stamp"),
+                                (T::Heal, icons::HEAL, "Healing brush"),
+                                (T::SpotHeal, icons::SPOT_HEAL, "Spot heal"),
+                                (T::ContentFill, icons::CONTENT_FILL, "Content-aware fill"),
+                                (T::Dodge, icons::DODGE, "Dodge / burn"),
+                                (T::Detail, icons::DETAIL, "Detail (sponge/blur/sharpen)"),
+                                (T::Liquify, icons::LIQUIFY, "Liquify"),
+                            ],
+                            &[
+                                (T::Fill, icons::FILL, "Bucket fill"),
+                                (T::Gradient, icons::GRADIENT, "Gradient"),
+                            ],
+                            &[(T::Eyedropper, icons::EYEDROPPER, "Eyedropper")],
+                            &[(T::Text, icons::TEXT, "Text")],
+                            &[
+                                (T::ShapeRect, icons::SHAPE, "Rectangle shape"),
+                                (T::ShapeEllipse, icons::ELLIPSE_SELECT, "Ellipse shape"),
+                            ],
+                        ];
+                        for tools in groups {
+                            let active = tools.iter().find(|(t, _, _)| *t == self.tool);
+                            let rep = active.map(|(_, ic, _)| *ic).unwrap_or(tools[0].1);
+                            if tools.len() == 1 {
+                                let (t, ic, name) = tools[0];
+                                let btn = egui::SelectableLabel::new(
+                                    self.tool == t,
+                                    egui::RichText::new(ic).size(20.0),
+                                );
+                                if ui
+                                    .add_sized([36.0, 30.0], btn)
+                                    .on_hover_text(name)
+                                    .clicked()
+                                {
+                                    self.tool = t;
+                                }
+                            } else {
+                                // Flyout menu; button shows the active variant's icon.
+                                let label = egui::RichText::new(rep).size(20.0).color(
+                                    if active.is_some() {
+                                        ui.visuals().selection.stroke.color
+                                    } else {
+                                        ui.visuals().text_color()
+                                    },
+                                );
+                                ui.menu_button(label, |ui| {
+                                    for (t, ic, name) in tools.iter() {
+                                        if ui
+                                            .selectable_label(
+                                                self.tool == *t,
+                                                format!("{ic}  {name}"),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.tool = *t;
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
                             }
                         }
                         ui.add_space(6.0);
