@@ -31,6 +31,7 @@ enum Tool {
     Brush,
     Eraser,
     Clone, // clone stamp: Alt-click sets source, drag stamps from it
+    Heal,  // healing brush: Alt-click source, brush region, gradient-domain heal on release
     Fill,
     Eyedropper,
     SelectRect,
@@ -131,10 +132,13 @@ pub struct PigmentApp {
     stroke_residual: f32,
     stroke_dirty: Option<(egui::Vec2, egui::Vec2)>,
     wet_active: bool,
-    /// Clone Stamp source anchor (doc px), set by Alt-click.
+    /// Clone Stamp / Healing Brush source anchor (doc px), set by Alt-click.
     clone_source: Option<egui::Vec2>,
-    /// destAnchor − sourceAnchor for the active clone stroke (doc px).
+    /// destAnchor − sourceAnchor for the active clone/heal stroke (doc px).
     clone_offset: [f32; 2],
+    /// Healing Brush coverage (canvas-sized, doc px); accumulated over a stroke,
+    /// solved on release.
+    heal_mask: Vec<bool>,
     undo_count: u32,
     redo_count: u32,
     // Compositing dirty tracking.
@@ -235,6 +239,7 @@ impl PigmentApp {
             wet_active: false,
             clone_source: None,
             clone_offset: [0.0; 2],
+            heal_mask: Vec::new(),
             undo_count: 0,
             redo_count: 0,
             force_composite: true,
@@ -405,6 +410,98 @@ impl PigmentApp {
                 }
             }
             gpu.upload_layer(q, active, &f32_to_f16_bytes(&base));
+        });
+        self.force_composite = true;
+    }
+
+    /// Stamp a filled disk of radius `r` (doc px) into the Healing Brush mask.
+    fn heal_mark(&mut self, c: egui::Vec2, r: f32) {
+        let (w, h) = (self.doc.size.width as i64, self.doc.size.height as i64);
+        if self.heal_mask.len() != (w * h) as usize {
+            self.heal_mask = vec![false; (w * h) as usize];
+        }
+        let r2 = r * r;
+        let x0 = (c.x - r).floor() as i64;
+        let x1 = (c.x + r).ceil() as i64;
+        let y0 = (c.y - r).floor() as i64;
+        let y1 = (c.y + r).ceil() as i64;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if x < 0 || y < 0 || x >= w || y >= h {
+                    continue;
+                }
+                let dx = x as f32 + 0.5 - c.x;
+                let dy = y as f32 + 0.5 - c.y;
+                if dx * dx + dy * dy <= r2 {
+                    self.heal_mask[(y * w + x) as usize] = true;
+                }
+            }
+        }
+    }
+
+    /// Gradient-domain heal on stroke release: transplant the source patch's
+    /// texture into the brushed region, tone-matched to the destination boundary
+    /// (`prism_core::heal::seamless_clone`). Operates on straight linear RGB.
+    fn do_heal(&mut self, frame: &mut eframe::Frame, offset: [f32; 2]) {
+        if !self.heal_mask.iter().any(|&m| m) {
+            return;
+        }
+        let (w, h) = (self.doc.size.width as usize, self.doc.size.height as usize);
+        if self.heal_mask.len() != w * h {
+            return;
+        }
+        let active = self.active_id();
+        let mask0 = std::mem::take(&mut self.heal_mask);
+        let off = (offset[0].round() as i64, offset[1].round() as i64);
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, "Healing Brush");
+            let Some(bytes) = gpu.read_layer(d, q, active) else {
+                return;
+            };
+            let prem = f16_bytes_to_f32(&bytes); // premultiplied linear RGBA
+                                                 // Premultiplied → straight linear.
+            let mut dest = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = prem[p * 4 + 3];
+                let inv = if a > 1e-5 { 1.0 / a } else { 0.0 };
+                dest[p * 4] = prem[p * 4] * inv;
+                dest[p * 4 + 1] = prem[p * 4 + 1] * inv;
+                dest[p * 4 + 2] = prem[p * 4 + 2] * inv;
+                dest[p * 4 + 3] = a;
+            }
+            // Source aligned to dest coords: src[p] = dest[p − offset]; disable
+            // mask pixels whose source falls off-canvas.
+            let mut src = vec![0.0f32; w * h * 4];
+            let mut mask = mask0;
+            for y in 0..h {
+                for x in 0..w {
+                    let p = y * w + x;
+                    if !mask[p] {
+                        continue;
+                    }
+                    let sx = x as i64 - off.0;
+                    let sy = y as i64 - off.1;
+                    if sx < 0 || sy < 0 || sx >= w as i64 || sy >= h as i64 {
+                        mask[p] = false;
+                        continue;
+                    }
+                    let sp = (sy as usize) * w + sx as usize;
+                    for c in 0..4 {
+                        src[p * 4 + c] = dest[sp * 4 + c];
+                    }
+                }
+            }
+            let solved = prism_core::heal::seamless_clone(&dest, &src, &mask, w, h, 250);
+            // Straight → premultiplied f16.
+            let mut out = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = solved[p * 4 + 3];
+                out[p * 4] = solved[p * 4] * a;
+                out[p * 4 + 1] = solved[p * 4 + 1] * a;
+                out[p * 4 + 2] = solved[p * 4 + 2] * a;
+                out[p * 4 + 3] = a;
+            }
+            gpu.upload_layer(q, active, &f32_to_f16_bytes(&out));
         });
         self.force_composite = true;
     }
@@ -1694,6 +1791,11 @@ impl eframe::App for PigmentApp {
                         icons::CLONE,
                         "Clone stamp (Alt-click sets source)",
                     ),
+                    (
+                        Tool::Heal,
+                        icons::HEAL,
+                        "Healing brush (Alt-click source; heals on release)",
+                    ),
                     (Tool::Fill, icons::FILL, "Bucket fill"),
                     (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
                     (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
@@ -2319,6 +2421,53 @@ impl eframe::App for PigmentApp {
                             self.stroke_residual = 0.0;
                         }
                     }
+                    Tool::Heal => {
+                        let alt = ui.input(|i| i.modifiers.alt);
+                        let r = self.brush_size * 0.5;
+                        if let Some(p) = response.interact_pointer_pos() {
+                            let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                            if alt {
+                                if response.drag_started() || response.clicked() {
+                                    self.clone_source = Some(cur);
+                                }
+                            } else if let Some(src) = self.clone_source {
+                                match self.stroke_last {
+                                    None => {
+                                        self.clone_offset = [cur.x - src.x, cur.y - src.y];
+                                        let n =
+                                            (self.doc.size.width * self.doc.size.height) as usize;
+                                        self.heal_mask = vec![false; n];
+                                        self.heal_mark(cur, r);
+                                        self.stroke_last = Some(cur);
+                                    }
+                                    Some(last) => {
+                                        let seg = cur - last;
+                                        let dist = seg.length();
+                                        if dist > 1e-3 {
+                                            let dir = seg / dist;
+                                            let step = (r * 0.5).max(1.0);
+                                            let mut t = 0.0;
+                                            while t <= dist {
+                                                self.heal_mark(last + dir * t, r);
+                                                t += step;
+                                            }
+                                            self.heal_mark(cur, r);
+                                            self.stroke_last = Some(cur);
+                                        }
+                                    }
+                                }
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                        if response.drag_stopped()
+                            || (self.stroke_last.is_some()
+                                && response.interact_pointer_pos().is_none())
+                        {
+                            let off = self.clone_offset;
+                            self.do_heal(frame, off);
+                            self.stroke_last = None;
+                        }
+                    }
                     Tool::Fill => {
                         if response.clicked() {
                             if let Some(p) = response.interact_pointer_pos() {
@@ -2514,8 +2663,8 @@ impl eframe::App for PigmentApp {
                     },
                 ));
 
-                // Clone-stamp source marker (crosshair at the sampled point).
-                if self.tool == Tool::Clone {
+                // Clone / Heal source marker (crosshair at the sampled point).
+                if matches!(self.tool, Tool::Clone | Tool::Heal) {
                     if let Some(src) = self.clone_source {
                         let sp = egui::pos2(
                             doc_rect.min.x

@@ -258,7 +258,7 @@ Each phase is a coherent, shippable slice. Effort tags: **S** ≤1wk-equiv, **M*
 The single biggest "feels like Photoshop" gap. All operate on the active raster layer (or a
 sampled-merged source), undoable via region-COW, selection-clipped.
 - [x] **Clone Stamp** (Alt-click source → aligned offset; frozen pre-stroke snapshot sampled in a GPU clone-dab pass; soft brush + opacity; selection-clipped; on-canvas source crosshair; GPU-pixel-tested). *Still: non-aligned mode, sample all-layers/below, flow vs opacity, rotation.*
-- [ ] **Healing Brush** (L, shared math): clone *gradients* not pixels — Poisson/gradient-domain blend so texture transplants but tone matches the destination
+- [x] **Healing Brush** (Alt-click source → brush a region → on release a gradient-domain Poisson solve transplants the source *texture* with the destination tone matched at the region boundary). Solver is `prism_core::heal::seamless_clone` (Gauss–Seidel membrane, shared core, unit-tested incl. tone-match + texture-transfer). *Still: continuous (per-dab) heal, spot/auto-source, content-aware fallback.*
 - [ ] **Spot Healing** (M): auto-source from surrounding ring (proximity match) → Poisson blend; content-aware mode falls through to PatchMatch fill
 - [ ] **Patch tool** (M): lasso a region, drag onto a source area, seamless-blend (Poisson) the result
 - [ ] **Content-Aware Fill** (L): PatchMatch synthesis over the selection from sampled regions; sampling-area mask + scale/mirror/rotation adaptation; optional LaMa-ONNX guidance for structure (Phase 10 dep, degrades gracefully without)

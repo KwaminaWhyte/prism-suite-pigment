@@ -51,6 +51,8 @@ pub const BRUSH: &str = ph::PAINT_BRUSH;
 pub const ERASER: &str = ph::ERASER;
 /// Clone-stamp tool.
 pub const CLONE: &str = ph::STAMP;
+/// Healing-brush tool.
+pub const HEAL: &str = ph::BANDAIDS;
 /// Fill / paint-bucket tool.
 pub const FILL: &str = ph::PAINT_BUCKET;
 /// Eyedropper / color-pick tool.

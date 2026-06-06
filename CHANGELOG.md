@@ -7,6 +7,12 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Healing Brush** (Phase 6 retouch). Alt-click sets a source; brush over the area
+  to repair; on release a gradient-domain Poisson solve transplants the source's
+  *texture* while matching the destination's tone/color at the region boundary —
+  seamless repair, not a hard-edged copy. Solver lives in the shared core
+  (`prism_core::heal::seamless_clone`, Gauss–Seidel membrane), unit-tested for
+  tone-matching and texture transfer.
 - **Clone Stamp tool** (Phase 6 retouch). Alt-click sets a source anchor; dragging
   stamps pixels copied from a frozen pre-stroke snapshot at a locked (aligned)
   offset, through a dedicated GPU clone-dab pass (`clone.wgsl`). Soft brush +
