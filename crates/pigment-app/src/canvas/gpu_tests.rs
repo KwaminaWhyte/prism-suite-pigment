@@ -435,6 +435,75 @@ fn posterize_adjustment() {
     );
 }
 
+// Gradient Map (red shadows -> blue highlights) over a white backdrop maps the
+// high luminance to blue.
+#[test]
+fn gradient_map_adjustment() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping gradient_map_adjustment");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(8, 8);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    let l1 = LayerId(1);
+    gpu.ensure_layer(&device, l0);
+    gpu.ensure_layer(&device, l1);
+    gpu.upload_layer(&queue, l0, &solid(8, 1.0, 1.0, 1.0, 1.0)); // white backdrop
+    gpu.set_gradient_lut(&device, &queue, l1, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+
+    let (k, p) = prism_core::adjust::Adjustment::GradientMap {
+        low: [1.0, 0.0, 0.0],
+        high: [0.0, 0.0, 1.0],
+    }
+    .encode();
+    let order = vec![
+        LayerDraw {
+            id: l0,
+            opacity: 1.0,
+            blend: 0,
+            visible: true,
+            adjust_kind: 0,
+            adjust: [0.0; 4],
+            has_blend_if: false,
+            blend_if: [0.0, 1.0, 0.0, 1.0],
+            clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
+        },
+        LayerDraw {
+            id: l1,
+            opacity: 1.0,
+            blend: 0,
+            visible: true,
+            adjust_kind: k,
+            adjust: p,
+            has_blend_if: false,
+            blend_if: [0.0, 1.0, 0.0, 1.0],
+            clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
+            has_shadow: false,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
+        },
+    ];
+    let pp = gpu.composite_now(&device, &queue, &order);
+    let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
+    assert!(
+        px[2] > 0.8 && px[0] < 0.2,
+        "white backdrop maps to the highlight color (blue): {px:?}"
+    );
+}
+
 // Blend-If: a gray top layer with "this layer white" pulled below its luma is
 // hidden, revealing the white layer beneath.
 #[test]

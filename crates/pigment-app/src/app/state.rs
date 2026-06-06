@@ -16,12 +16,27 @@ impl PigmentApp {
                 _ => None,
             })
             .collect();
-        if curves.is_empty() {
+        let gradmaps: Vec<(LayerId, [f32; 3], [f32; 3])> = self
+            .doc
+            .layers
+            .layers
+            .iter()
+            .filter_map(|l| match &l.kind {
+                LayerKind::Adjustment(Adjustment::GradientMap { low, high }) => {
+                    Some((l.id, *low, *high))
+                }
+                _ => None,
+            })
+            .collect();
+        if curves.is_empty() && gradmaps.is_empty() {
             return;
         }
         with_gpu(frame, |gpu, device, queue| {
             for (id, cp) in &curves {
                 gpu.set_curve_lut(device, queue, *id, &cp.rgb, &cp.r, &cp.g, &cp.b);
+            }
+            for (id, low, high) in &gradmaps {
+                gpu.set_gradient_lut(device, queue, *id, *low, *high);
             }
         });
     }
@@ -165,6 +180,11 @@ impl PigmentApp {
                             x.to_bits().hash(&mut h);
                             y.to_bits().hash(&mut h);
                         }
+                    }
+                }
+                if let Adjustment::GradientMap { low, high } = a {
+                    for v in low.iter().chain(high.iter()) {
+                        v.to_bits().hash(&mut h);
                     }
                 }
             }

@@ -294,6 +294,32 @@ impl CanvasGpu {
         write_lut(queue, &t.tex, &texels);
     }
 
+    /// Build + upload a Gradient-Map LUT (luma → lerp(low, high)) for layer `id`,
+    /// stored in the same per-layer LUT slot the compositor samples.
+    pub fn set_gradient_lut(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        low: [f32; 3],
+        high: [f32; 3],
+    ) {
+        let n = LUT_W as usize;
+        let mut texels = vec![half::f16::from_f32(0.0); n * 4];
+        for (i, px) in texels.chunks_mut(4).enumerate() {
+            let t = i as f32 / (n - 1) as f32;
+            px[0] = half::f16::from_f32(low[0] + (high[0] - low[0]) * t);
+            px[1] = half::f16::from_f32(low[1] + (high[1] - low[1]) * t);
+            px[2] = half::f16::from_f32(low[2] + (high[2] - low[2]) * t);
+            px[3] = half::f16::from_f32(1.0);
+        }
+        let tex = self
+            .curve_luts
+            .entry(id)
+            .or_insert_with(|| make_lut_target(device, "lut.gradmap"));
+        write_lut(queue, &tex.tex, &texels);
+    }
+
     /// Upload raw RGBA16F (linear premultiplied) bytes into a layer.
     pub fn upload_layer(&mut self, queue: &wgpu::Queue, id: LayerId, bytes: &[u8]) {
         let Some(layer) = self.layers.get(&id) else {

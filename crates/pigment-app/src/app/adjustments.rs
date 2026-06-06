@@ -55,6 +55,16 @@ pub(crate) fn adjustment_ui(ui: &mut egui::Ui, adj: &mut Adjustment) {
                 *levels = l.round() as u32;
             }
         }
+        Adjustment::GradientMap { low, high } => {
+            ui.horizontal(|ui| {
+                ui.label("shadows");
+                ui.color_edit_button_rgb(low);
+            });
+            ui.horizontal(|ui| {
+                ui.label("highlights");
+                ui.color_edit_button_rgb(high);
+            });
+        }
         Adjustment::Invert | Adjustment::BlackWhite => {
             ui.label("(no parameters)");
         }

@@ -7,6 +7,10 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Gradient Map adjustment** (Phase 7). Non-destructive — maps the backdrop's
+  luminance through a two-color gradient (shadows→highlights) built into the
+  per-layer LUT texture and sampled in the compositor (shader kind 12). Two color
+  pickers; GPU pixel-tested.
 - **Layer style: Drop Shadow** (Phase 7). Non-destructive — a blurred, offset,
   tinted copy of the layer's alpha drawn behind it, evaluated live in the
   compositor (16-tap disk blur). Per-layer color (premultiplied) + offset + blur;

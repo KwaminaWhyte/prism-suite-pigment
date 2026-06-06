@@ -277,7 +277,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 - [~] **Blend-If / advanced blending** (M): **done** — this-layer + underlying-layer gray-range gating with soft-feathered ranges, evaluated in the composite shader (the backdrop is already bound); per-layer sliders + GPU pixel test. *Still:* per-channel split sliders, fill-vs-opacity, knockout, blend-interior effects.
 - [~] **Channels panel** (M): **done** — alpha channels (save the current selection as a named channel; load a channel back into the selection; delete), GPU round-trip-tested. *Still:* view/edit per-channel RGB, spot channels, split/merge channels.
 - [ ] **Layer comps** (S): named snapshots of visibility/position/appearance
-- [~] **Adjustment expansion** (M): **done** — Curves (Ph4), **Vibrance**, **Photo Filter**, **Posterize** (all non-destructive adjustment layers, composite-shader kinds 9/10/11, GPU-tested). *Still:* Color Balance, Channel Mixer, Selective Color, Gradient Map, Color Lookup (`.cube`/`.3dl` LUT), Shadows/Highlights, HDR Toning, Equalize, Replace/Match Color.
+- [~] **Adjustment expansion** (M): **done** — Curves (Ph4), **Vibrance**, **Photo Filter**, **Posterize**, **Gradient Map** (luma→2-color gradient via the curve-LUT texture, kind 12) — all non-destructive adjustment layers, composite-shader kinds 9/10/11/12, GPU-tested. *Still:* Color Balance, Channel Mixer, Selective Color, multi-stop Gradient Map, Color Lookup (`.cube`/`.3dl` LUT), Shadows/Highlights, HDR Toning, Equalize, Replace/Match Color.
 - [ ] Tests: layer-style pass pixel asserts; smart-object re-render on source edit; blend-if math; alpha-channel round-trip
 
 ### Phase 8 — Filters & distort galleries  *(creative + corrective filters)*
