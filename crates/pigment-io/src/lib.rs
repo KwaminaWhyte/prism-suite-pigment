@@ -5,6 +5,7 @@
 //! in later phases (PLAN.md §4).
 
 pub mod document_file;
+pub mod resize;
 
 use std::path::Path;
 

@@ -14,13 +14,18 @@ use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTra
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
-    Move,
+    Move,        // pan the view (hand)
+    MoveLayer,   // translate the active layer
     Brush,
     Eraser,
     Fill,
     Eyedropper,
     SelectRect,
     SelectEllipse,
+    Lasso,
+    MagicWand,
+    Transform,
+    Crop,
 }
 
 /// Layers + pixels staged for GPU upload on the next frame.
@@ -124,6 +129,9 @@ impl PigmentApp {
             .expect("pigment requires the wgpu backend");
         let gpu = CanvasGpu::new(&render_state.device, render_state.target_format);
         render_state.renderer.write().callback_resources.insert(gpu);
+
+        crate::icons::install(&cc.egui_ctx);
+        crate::theme::apply(&cc.egui_ctx);
 
         let placeholder = pigment_io::placeholder(Size::new(1280, 800));
         let doc = Document::new(placeholder.size);
@@ -493,26 +501,34 @@ impl eframe::App for PigmentApp {
             });
         });
 
-        egui::SidePanel::left("tools").exact_width(64.0).show_inside(root, |ui| {
-            ui.add_space(4.0);
-            for (tool, label) in [
-                (Tool::Move, "Pan"),
-                (Tool::Brush, "Brush"),
-                (Tool::Eraser, "Erase"),
-                (Tool::Fill, "Fill"),
-                (Tool::Eyedropper, "Pick"),
-                (Tool::SelectRect, "Rect"),
-                (Tool::SelectEllipse, "Oval"),
+        egui::SidePanel::left("tools").exact_width(48.0).show_inside(root, |ui| {
+            ui.add_space(6.0);
+            use crate::icons;
+            for (tool, icon, name) in [
+                (Tool::Move, icons::PAN, "Pan view"),
+                (Tool::MoveLayer, icons::MOVE, "Move layer"),
+                (Tool::Brush, icons::BRUSH, "Brush"),
+                (Tool::Eraser, icons::ERASER, "Eraser"),
+                (Tool::Fill, icons::FILL, "Bucket fill"),
+                (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
+                (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
+                (Tool::SelectEllipse, icons::ELLIPSE_SELECT, "Ellipse select"),
+                (Tool::Lasso, icons::LASSO, "Lasso select"),
+                (Tool::MagicWand, icons::MAGIC_WAND, "Magic wand"),
+                (Tool::Transform, icons::TRANSFORM, "Transform"),
+                (Tool::Crop, icons::CROP, "Crop"),
             ] {
-                if ui
-                    .add_sized([56.0, 24.0], egui::SelectableLabel::new(self.tool == tool, label))
-                    .clicked()
-                {
+                let btn = egui::SelectableLabel::new(
+                    self.tool == tool,
+                    egui::RichText::new(icon).size(20.0),
+                );
+                if ui.add_sized([36.0, 30.0], btn).on_hover_text(name).clicked() {
                     self.tool = tool;
                 }
             }
+            ui.add_space(6.0);
             ui.separator();
-            ui.color_edit_button_srgba(&mut self.brush_color);
+            ui.vertical_centered(|ui| ui.color_edit_button_srgba(&mut self.brush_color));
         });
 
         egui::SidePanel::right("panels").default_width(250.0).show_inside(root, |ui| {
@@ -555,7 +571,11 @@ impl eframe::App for PigmentApp {
             ui.separator();
             ui.horizontal(|ui| {
                 ui.heading("Layers");
-                if ui.button("+ New").on_hover_text("New layer").clicked() {
+                if ui
+                    .button(egui::RichText::new(crate::icons::PLUS_LAYER).size(18.0))
+                    .on_hover_text("New layer")
+                    .clicked()
+                {
                     let id = self.doc.layers.add_raster(format!("Layer {}", self.doc.layers.layers.len()));
                     self.doc.active_layer = Some(id);
                 }
@@ -577,16 +597,22 @@ impl eframe::App for PigmentApp {
                     .inner_margin(4.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut layer.visible, "")
-                                .on_hover_text("Visible");
-                            ui.add(egui::TextEdit::singleline(&mut layer.name).desired_width(96.0));
-                            if ui.small_button("Up").clicked() {
+                            let eye = if layer.visible { crate::icons::EYE } else { " " };
+                            if ui
+                                .selectable_label(layer.visible, egui::RichText::new(eye).size(15.0))
+                                .on_hover_text("Toggle visibility")
+                                .clicked()
+                            {
+                                layer.visible = !layer.visible;
+                            }
+                            ui.add(egui::TextEdit::singleline(&mut layer.name).desired_width(90.0));
+                            if ui.small_button(crate::icons::ARROW_UP).on_hover_text("Move up").clicked() {
                                 action = LayerAction::MoveUp(id);
                             }
-                            if ui.small_button("Dn").clicked() {
+                            if ui.small_button(crate::icons::ARROW_DOWN).on_hover_text("Move down").clicked() {
                                 action = LayerAction::MoveDown(id);
                             }
-                            if ui.small_button("Del").clicked() {
+                            if ui.small_button(crate::icons::TRASH).on_hover_text("Delete layer").clicked() {
                                 action = LayerAction::Delete(id);
                             }
                         });
@@ -699,6 +725,8 @@ impl eframe::App for PigmentApp {
                             self.view.pan += response.drag_delta();
                         }
                     }
+                    // Implemented in later Phase 2 waves.
+                    Tool::MoveLayer | Tool::Lasso | Tool::MagicWand | Tool::Transform | Tool::Crop => {}
                     Tool::Brush | Tool::Eraser => {
                         let spacing = (self.brush_size * 0.15).max(0.75);
                         let dt = ui.input(|i| i.stable_dt).max(1e-3);

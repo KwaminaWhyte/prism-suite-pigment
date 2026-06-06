@@ -11,6 +11,7 @@ pub mod document;
 pub mod fill;
 pub mod geometry;
 pub mod layer;
+pub mod raster;
 pub mod tile;
 
 pub use blend::BlendMode;

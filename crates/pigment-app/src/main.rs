@@ -6,6 +6,8 @@
 
 mod app;
 mod canvas;
+mod icons;
+mod theme;
 
 use app::PigmentApp;
 

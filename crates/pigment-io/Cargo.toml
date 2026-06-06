@@ -18,3 +18,5 @@ image = { version = "0.25", default-features = false, features = [
     "bmp",
     "gif",
 ] }
+fast_image_resize = "6"
+bytemuck.workspace = true
