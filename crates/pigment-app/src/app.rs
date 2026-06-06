@@ -89,6 +89,10 @@ pub struct PigmentApp {
     brush_size: f32,
     brush_hardness: f32,
     brush_opacity: f32,
+    /// Pressure → dab size. Hardware pressure isn't exposed through eframe today,
+    /// so we drive it from stroke velocity (faster = thinner) when enabled.
+    speed_dynamics: bool,
+    min_size_scale: f32,
     fill_tolerance: f32,
     fill_contiguous: bool,
     sample_all: bool,
@@ -127,6 +131,8 @@ impl PigmentApp {
             brush_size: 40.0,
             brush_hardness: 0.5,
             brush_opacity: 1.0,
+            speed_dynamics: false,
+            min_size_scale: 0.35,
             fill_tolerance: 0.1,
             fill_contiguous: true,
             sample_all: false,
@@ -260,11 +266,11 @@ impl PigmentApp {
         self.view = ViewTransform { pan: egui::Vec2::ZERO, zoom: scale.clamp(0.02, 64.0) };
     }
 
-    fn dab_at(&self, doc_pos: egui::Vec2, alpha: f32) -> Dab {
+    fn dab_at(&self, doc_pos: egui::Vec2, alpha: f32, size_scale: f32) -> Dab {
         let c = self.brush_color;
         Dab {
             center: [doc_pos.x, doc_pos.y],
-            radius: (self.brush_size * 0.5).max(0.5),
+            radius: (self.brush_size * 0.5 * size_scale).max(0.5),
             hardness: self.brush_hardness.clamp(0.0, 0.99),
             color: [
                 srgb_to_linear(c.r() as f32 / 255.0),
@@ -428,6 +434,11 @@ impl eframe::App for PigmentApp {
             ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=400.0).text("size"));
             ui.add(egui::Slider::new(&mut self.brush_hardness, 0.0..=0.99).text("hardness"));
             ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0).text("opacity"));
+            ui.checkbox(&mut self.speed_dynamics, "speed → size")
+                .on_hover_text("Faster strokes paint thinner (stylus pressure isn't exposed by eframe)");
+            if self.speed_dynamics {
+                ui.add(egui::Slider::new(&mut self.min_size_scale, 0.05..=1.0).text("min size"));
+            }
             if self.tool == Tool::Fill {
                 ui.add(egui::Slider::new(&mut self.fill_tolerance, 0.0..=1.0).text("tolerance"));
                 ui.checkbox(&mut self.fill_contiguous, "contiguous");
@@ -601,6 +612,7 @@ impl eframe::App for PigmentApp {
                     }
                     Tool::Brush | Tool::Eraser => {
                         let spacing = (self.brush_size * 0.15).max(0.75);
+                        let dt = ui.input(|i| i.stable_dt).max(1e-3);
                         if let Some(p) = response.interact_pointer_pos() {
                             let cur = screen_to_doc(p, doc_rect, self.doc.size);
                             match self.stroke_last {
@@ -610,7 +622,7 @@ impl eframe::App for PigmentApp {
                                         wet_begin = true;
                                         self.wet_active = true;
                                     }
-                                    dabs.push(self.dab_at(cur, dab_alpha));
+                                    dabs.push(self.dab_at(cur, dab_alpha, 1.0));
                                     self.stroke_last = Some(cur);
                                     self.stroke_residual = 0.0;
                                 }
@@ -618,10 +630,18 @@ impl eframe::App for PigmentApp {
                                     let seg = cur - last;
                                     let dist = seg.length();
                                     if dist > 1e-3 {
+                                        // Velocity → size: faster strokes taper thinner.
+                                        let scale = if self.speed_dynamics {
+                                            const SPEED_MAX: f32 = 2500.0; // doc px/sec
+                                            let n = (dist / dt / SPEED_MAX).clamp(0.0, 1.0);
+                                            1.0 - n * (1.0 - self.min_size_scale)
+                                        } else {
+                                            1.0
+                                        };
                                         let dir = seg / dist;
                                         let mut t = self.stroke_residual;
                                         while t <= dist {
-                                            dabs.push(self.dab_at(last + dir * t, dab_alpha));
+                                            dabs.push(self.dab_at(last + dir * t, dab_alpha, scale));
                                             t += spacing;
                                         }
                                         self.stroke_residual = t - dist;
