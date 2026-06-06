@@ -91,12 +91,13 @@ pub struct PigmentApp {
     brush_opacity: f32,
     fill_tolerance: f32,
     fill_contiguous: bool,
+    sample_all: bool,
     needs_fit: bool,
 
     stroke_last: Option<egui::Vec2>,
     stroke_residual: f32,
-    undo_req: bool,
-    redo_req: bool,
+    undo_count: u32,
+    redo_count: u32,
 }
 
 impl PigmentApp {
@@ -127,16 +128,31 @@ impl PigmentApp {
             brush_opacity: 1.0,
             fill_tolerance: 0.1,
             fill_contiguous: true,
+            sample_all: false,
             needs_fit: true,
             stroke_last: None,
             stroke_residual: 0.0,
-            undo_req: false,
-            redo_req: false,
+            undo_count: 0,
+            redo_count: 0,
         }
     }
 
     fn active_id(&self) -> LayerId {
         self.doc.active_layer.unwrap_or(self.background_id)
+    }
+
+    fn layer_order(&self) -> Vec<LayerDraw> {
+        self.doc
+            .layers
+            .layers
+            .iter()
+            .map(|l| LayerDraw {
+                id: l.id,
+                opacity: l.opacity,
+                blend: l.blend.shader_id(),
+                visible: l.visible,
+            })
+            .collect()
     }
 
     fn open_image(&mut self) {
@@ -271,25 +287,44 @@ impl PigmentApp {
         ];
         let tol = self.fill_tolerance;
         let contiguous = self.fill_contiguous;
+        let sample_all = self.sample_all;
+        let order = self.layer_order();
         with_gpu(frame, |gpu, device, queue| {
-            gpu.begin_command_now(device, queue, active);
-            let Some(bytes) = gpu.read_layer(device, queue, active) else { return };
-            let mut buf = f16_bytes_to_f32(&bytes);
-            let mask = flood_fill_mask(&buf, w, h, seed.0, seed.1, tol, contiguous);
+            gpu.begin_command_now(device, queue, active, "Fill");
+            // Sample source: the composite (all layers) or just the active layer.
+            let sample = if sample_all {
+                let is_ping = gpu.composite_now(device, queue, &order);
+                gpu.read_composite(device, queue, is_ping)
+            } else {
+                gpu.read_layer(device, queue, active)
+            };
+            let Some(sample) = sample else { return };
+            let sbuf = f16_bytes_to_f32(&sample);
+            let mask = flood_fill_mask(&sbuf, w, h, seed.0, seed.1, tol, contiguous);
+            // Write target is always the active layer.
+            let Some(active_bytes) = gpu.read_layer(device, queue, active) else { return };
+            let mut abuf = f16_bytes_to_f32(&active_bytes);
             for (i, &m) in mask.iter().enumerate() {
                 if m {
                     let o = i * 4;
-                    buf[o..o + 4].copy_from_slice(&fill);
+                    abuf[o..o + 4].copy_from_slice(&fill);
                 }
             }
-            gpu.upload_layer(queue, active, &f32_to_f16_bytes(&buf));
+            gpu.upload_layer(queue, active, &f32_to_f16_bytes(&abuf));
         });
     }
 
     fn do_eyedrop(&mut self, frame: &mut eframe::Frame, seed: (u32, u32)) {
         let active = self.active_id();
+        let sample_all = self.sample_all;
+        let order = self.layer_order();
         let px = with_gpu(frame, |gpu, device, queue| {
-            gpu.read_pixel(device, queue, active, seed.0, seed.1)
+            if sample_all {
+                let is_ping = gpu.composite_now(device, queue, &order);
+                gpu.read_composite_pixel(device, queue, is_ping, seed.0, seed.1)
+            } else {
+                gpu.read_pixel(device, queue, active, seed.0, seed.1)
+            }
         })
         .flatten();
         if let Some(p) = px {
@@ -346,11 +381,11 @@ impl eframe::App for PigmentApp {
                 });
                 ui.menu_button("Edit", |ui| {
                     if ui.button("Undo").clicked() {
-                        self.undo_req = true;
+                        self.undo_count += 1;
                         ui.close_menu();
                     }
                     if ui.button("Redo").clicked() {
-                        self.redo_req = true;
+                        self.redo_count += 1;
                         ui.close_menu();
                     }
                 });
@@ -395,6 +430,28 @@ impl eframe::App for PigmentApp {
                 ui.add(egui::Slider::new(&mut self.fill_tolerance, 0.0..=1.0).text("tolerance"));
                 ui.checkbox(&mut self.fill_contiguous, "contiguous");
             }
+            if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
+                ui.checkbox(&mut self.sample_all, "sample all layers");
+            }
+
+            ui.separator();
+            let (undos, redos) = with_gpu(frame, |gpu, _, _| gpu.history_labels()).unwrap_or_default();
+            egui::CollapsingHeader::new(format!("History  ({} / {})", undos.len(), redos.len()))
+                .show(ui, |ui| {
+                    // Future states (redoable), furthest first.
+                    for (i, l) in redos.iter().enumerate().rev() {
+                        if ui.small_button(format!("↷ {l}")).clicked() {
+                            self.redo_count += (i + 1) as u32;
+                        }
+                    }
+                    ui.label("● now");
+                    // Past states (undoable), newest first.
+                    for (i, l) in undos.iter().rev().enumerate() {
+                        if ui.small_button(format!("↶ {l}")).clicked() {
+                            self.undo_count += (i + 1) as u32;
+                        }
+                    }
+                });
 
             ui.separator();
             ui.horizontal(|ui| {
@@ -504,20 +561,20 @@ impl eframe::App for PigmentApp {
                     }
                 }
 
-                let (mut undo, mut redo) = (self.undo_req, self.redo_req);
-                self.undo_req = false;
-                self.redo_req = false;
+                let (mut undo, mut redo) = (self.undo_count, self.redo_count);
+                self.undo_count = 0;
+                self.redo_count = 0;
                 ui.input(|i| {
                     if i.modifiers.command {
                         if i.key_pressed(egui::Key::Z) {
                             if i.modifiers.shift {
-                                redo = true;
+                                redo += 1;
                             } else {
-                                undo = true;
+                                undo += 1;
                             }
                         }
                         if i.key_pressed(egui::Key::Y) {
-                            redo = true;
+                            redo += 1;
                         }
                     }
                 });
@@ -592,18 +649,7 @@ impl eframe::App for PigmentApp {
                     }
                 }
 
-                let layers: Vec<LayerDraw> = self
-                    .doc
-                    .layers
-                    .layers
-                    .iter()
-                    .map(|l| LayerDraw {
-                        id: l.id,
-                        opacity: l.opacity,
-                        blend: l.blend.shader_id(),
-                        visible: l.visible,
-                    })
-                    .collect();
+                let layers = self.layer_order();
 
                 ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                     rect,
@@ -616,6 +662,7 @@ impl eframe::App for PigmentApp {
                         dabs,
                         erase,
                         begin_command,
+                        command_label: if erase { "Erase".into() } else { "Brush".into() },
                         undo,
                         redo,
                     },

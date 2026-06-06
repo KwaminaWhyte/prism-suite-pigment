@@ -84,6 +84,7 @@ struct GpuLayer {
 struct Snapshot {
     id: LayerId,
     tex: wgpu::Texture,
+    label: String,
 }
 
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -382,9 +383,8 @@ impl CanvasGpu {
         );
     }
 
-    /// Read a whole layer back to CPU as tightly-packed RGBA16F bytes.
-    pub fn read_layer(&self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId) -> Option<Vec<u8>> {
-        let layer = self.layers.get(&id)?;
+    /// Read a whole texture back to CPU as tightly-packed RGBA16F bytes.
+    fn readback_texture(&self, device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture) -> Option<Vec<u8>> {
         let (w, h) = (self.canvas_size.width, self.canvas_size.height);
         let unpadded = w * 8; // 4ch * f16
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -398,7 +398,7 @@ impl CanvasGpu {
         let mut enc = device.create_command_encoder(&Default::default());
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &layer.tex,
+                texture: tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -416,9 +416,7 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
         let slice = buf.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        device
-            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
-            .ok()?;
+        device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok()?;
         let data = slice.get_mapped_range();
         let mut out = Vec::with_capacity((unpadded * h) as usize);
         for row in 0..h {
@@ -430,16 +428,7 @@ impl CanvasGpu {
         Some(out)
     }
 
-    /// Read a single pixel (linear premultiplied RGBA) — for the eyedropper.
-    pub fn read_pixel(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        id: LayerId,
-        x: u32,
-        y: u32,
-    ) -> Option<[f32; 4]> {
-        let layer = self.layers.get(&id)?;
+    fn readback_pixel(&self, device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture, x: u32, y: u32) -> Option<[f32; 4]> {
         if x >= self.canvas_size.width || y >= self.canvas_size.height {
             return None;
         }
@@ -452,7 +441,7 @@ impl CanvasGpu {
         let mut enc = device.create_command_encoder(&Default::default());
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &layer.tex,
+                texture: tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
@@ -470,9 +459,7 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
         let slice = buf.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        device
-            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
-            .ok()?;
+        device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok()?;
         let data = slice.get_mapped_range();
         let px = [
             half::f16::from_le_bytes([data[0], data[1]]).to_f32(),
@@ -485,10 +472,42 @@ impl CanvasGpu {
         Some(px)
     }
 
-    /// Copy a layer's pixels into a fresh GPU texture (one undo unit).
-    fn snapshot_of(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId) -> Option<Snapshot> {
-        let layer = self.layers.get(&id)?;
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
+    /// Read a whole layer back to CPU as tightly-packed RGBA16F bytes.
+    pub fn read_layer(&self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId) -> Option<Vec<u8>> {
+        let tex = &self.layers.get(&id)?.tex;
+        self.readback_texture(device, queue, tex)
+    }
+
+    /// Read a single layer pixel (linear premultiplied RGBA) — for the eyedropper.
+    pub fn read_pixel(&self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId, x: u32, y: u32) -> Option<[f32; 4]> {
+        let tex = &self.layers.get(&id)?.tex;
+        self.readback_pixel(device, queue, tex, x, y)
+    }
+
+    /// Composite all layers now (own encoder) and return whether the result is in `ping`.
+    pub fn composite_now(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, order: &[LayerDraw]) -> bool {
+        let mut enc = device.create_command_encoder(&Default::default());
+        let r = self.composite(device, queue, &mut enc, order);
+        queue.submit([enc.finish()]);
+        r
+    }
+
+    fn target_tex(&self, is_ping: bool) -> Option<&wgpu::Texture> {
+        if is_ping { self.ping.as_ref() } else { self.pong.as_ref() }.map(|t| &t.tex)
+    }
+
+    /// Read the full composite (call right after `composite_now`).
+    pub fn read_composite(&self, device: &wgpu::Device, queue: &wgpu::Queue, is_ping: bool) -> Option<Vec<u8>> {
+        self.readback_texture(device, queue, self.target_tex(is_ping)?)
+    }
+
+    /// Read one composite pixel (linear premultiplied).
+    pub fn read_composite_pixel(&self, device: &wgpu::Device, queue: &wgpu::Queue, is_ping: bool, x: u32, y: u32) -> Option<[f32; 4]> {
+        self.readback_pixel(device, queue, self.target_tex(is_ping)?, x, y)
+    }
+
+    fn new_snapshot_tex(&self, device: &wgpu::Device) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
             label: Some("undo.snapshot"),
             size: wgpu::Extent3d {
                 width: self.canvas_size.width.max(1),
@@ -501,61 +520,61 @@ impl CanvasGpu {
             format: FMT,
             usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
-        });
+        })
+    }
+
+    /// Copy a layer's pixels into a fresh GPU texture (one undo unit).
+    fn snapshot_of(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId, label: &str) -> Option<Snapshot> {
+        let layer = self.layers.get(&id)?;
+        let tex = self.new_snapshot_tex(device);
         copy_tex(encoder, &layer.tex, &tex, self.canvas_size);
-        Some(Snapshot { id, tex })
+        Some(Snapshot { id, tex, label: label.to_string() })
+    }
+
+    fn push_undo(&mut self, snap: Snapshot) {
+        self.undo_stack.push(snap);
+        if self.undo_stack.len() > UNDO_MAX {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
     }
 
     /// Push the active layer's current pixels onto the undo stack (stroke start).
-    pub fn begin_command(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId) {
-        if let Some(snap) = self.snapshot_of(device, encoder, id) {
-            self.undo_stack.push(snap);
-            if self.undo_stack.len() > UNDO_MAX {
-                self.undo_stack.remove(0);
-            }
-            self.redo_stack.clear();
+    pub fn begin_command(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId, label: &str) {
+        if let Some(snap) = self.snapshot_of(device, encoder, id, label) {
+            self.push_undo(snap);
         }
     }
 
-    /// Snapshot the active layer using a self-contained encoder (for callers
-    /// outside the frame callback, e.g. bucket fill).
-    pub fn begin_command_now(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId) {
+    /// Snapshot using a self-contained encoder (for callers outside the frame
+    /// callback, e.g. bucket fill).
+    pub fn begin_command_now(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId, label: &str) {
         let mut enc = device.create_command_encoder(&Default::default());
-        if let Some(snap) = self.snapshot_of(device, &mut enc, id) {
+        if let Some(snap) = self.snapshot_of(device, &mut enc, id, label) {
             queue.submit([enc.finish()]);
-            self.undo_stack.push(snap);
-            if self.undo_stack.len() > UNDO_MAX {
-                self.undo_stack.remove(0);
-            }
-            self.redo_stack.clear();
+            self.push_undo(snap);
         }
+    }
+
+    /// Labels of pending undo steps (oldest→newest) and redo steps (next→furthest).
+    pub fn history_labels(&self) -> (Vec<String>, Vec<String>) {
+        let undo = self.undo_stack.iter().map(|s| s.label.clone()).collect();
+        let redo = self.redo_stack.iter().rev().map(|s| s.label.clone()).collect();
+        (undo, redo)
     }
 
     fn restore(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, from_undo: bool) {
-        let (pop, push) = if from_undo {
-            (&mut self.undo_stack, &mut self.redo_stack)
-        } else {
-            (&mut self.redo_stack, &mut self.undo_stack)
-        };
-        let Some(snap) = pop.pop() else { return };
-        // Save current state to the opposite stack, then restore the snapshot.
+        let snap = if from_undo { self.undo_stack.pop() } else { self.redo_stack.pop() };
+        let Some(snap) = snap else { return };
         if let Some(layer) = self.layers.get(&snap.id) {
-            let cur = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("undo.cur"),
-                size: wgpu::Extent3d {
-                    width: self.canvas_size.width.max(1),
-                    height: self.canvas_size.height.max(1),
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: FMT,
-                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+            let cur = self.new_snapshot_tex(device);
             copy_tex(encoder, &layer.tex, &cur, self.canvas_size);
-            push.push(Snapshot { id: snap.id, tex: cur });
+            let saved = Snapshot { id: snap.id, tex: cur, label: snap.label.clone() };
+            if from_undo {
+                self.redo_stack.push(saved);
+            } else {
+                self.undo_stack.push(saved);
+            }
             copy_tex(encoder, &snap.tex, &layer.tex, self.canvas_size);
         }
     }
@@ -831,8 +850,9 @@ pub struct CanvasPaint {
     pub erase: bool,
     /// Set on the first frame of a stroke — snapshots the layer for undo.
     pub begin_command: bool,
-    pub undo: bool,
-    pub redo: bool,
+    pub command_label: String,
+    pub undo: u32,
+    pub redo: u32,
 }
 
 impl CallbackTrait for CanvasPaint {
@@ -851,14 +871,14 @@ impl CallbackTrait for CanvasPaint {
             gpu.ensure_layer(device, l.id);
         }
 
-        if self.undo {
+        for _ in 0..self.undo {
             gpu.undo(device, encoder);
         }
-        if self.redo {
+        for _ in 0..self.redo {
             gpu.redo(device, encoder);
         }
         if self.begin_command {
-            gpu.begin_command(device, encoder, self.active_id);
+            gpu.begin_command(device, encoder, self.active_id, &self.command_label);
         }
         gpu.paint_dabs(device, queue, encoder, self.active_id, &self.dabs, self.erase);
         let final_is_ping = gpu.composite(device, queue, encoder, &self.layers);
