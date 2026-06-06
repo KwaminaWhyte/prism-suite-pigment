@@ -802,6 +802,35 @@ impl PigmentApp {
         self.needs_fit = true;
     }
 
+    /// Place a Contour vector document (`.contour`) as a new rasterized raster
+    /// layer (Pigment <- Contour cross-app interop). Static "place": the shapes
+    /// are flattened to pixels at the current document size; live Dynamic-Link
+    /// is future work. Shapes outside the canvas are simply clipped.
+    fn place_contour(&mut self, frame: &mut eframe::Frame) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Contour", &["contour"])
+            .pick_file()
+        else {
+            return;
+        };
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let placed = match crate::contour_import::place(&path, w, h) {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("place .contour failed: {e}");
+                return;
+            }
+        };
+        let id = self.doc.layers.add_raster(placed.name);
+        self.doc.active_layer = Some(id);
+        let bytes = f32_to_f16_bytes(&placed.pixels);
+        with_gpu(frame, |gpu, device, queue| {
+            gpu.ensure_layer(device, id);
+            gpu.upload_layer(queue, id, &bytes);
+        });
+        self.force_composite = true;
+    }
+
     fn open_exr(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("OpenEXR", &["exr"])
@@ -1218,6 +1247,11 @@ impl eframe::App for PigmentApp {
                     }
                     if ui.button("Open .exr…").clicked() {
                         self.open_exr();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Place .contour…").clicked() {
+                        self.place_contour(frame);
                         ui.close_menu();
                     }
                     ui.separator();

@@ -6,6 +6,7 @@
 
 mod app;
 mod canvas;
+mod contour_import;
 mod icons;
 mod theme;
 
