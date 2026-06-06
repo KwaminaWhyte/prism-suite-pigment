@@ -7,6 +7,9 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Blend-If** (Phase 7). Per-layer "this layer" + "underlying" luma-range sliders
+  (soft-feathered) that gate where the layer shows, evaluated in the compositor
+  shader against the source and backdrop luma. GPU pixel-tested.
 - **Adjustment expansion** (Phase 7). Three new non-destructive adjustment layers —
   **Vibrance** (saturation weighted to low-sat pixels), **Photo Filter**
   (luminosity-preserving warm/cool tint), **Posterize** (level quantize) — as

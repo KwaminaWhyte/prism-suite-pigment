@@ -182,6 +182,8 @@ pub struct PigmentApp {
     // Layer masks.
     masked_layers: HashSet<LayerId>,
     edit_mask: bool,
+    /// Per-layer Blend-If luma ranges [this_black, this_white, under_black, under_white].
+    blend_if: HashMap<LayerId, [f32; 4]>,
 
     // Filters.
     filter_radius: f32,
@@ -278,6 +280,7 @@ impl PigmentApp {
             resize_w: 1280,
             resize_h: 800,
             masked_layers: HashSet::new(),
+            blend_if: HashMap::new(),
             edit_mask: false,
             filter_radius: 4.0,
             filter_amount: 1.0,
@@ -1090,6 +1093,11 @@ impl PigmentApp {
                     }
                 }
             }
+            if let Some(bi) = self.blend_if.get(&l.id) {
+                for v in bi {
+                    v.to_bits().hash(&mut h);
+                }
+            }
         }
         h.finish()
     }
@@ -1108,6 +1116,7 @@ impl PigmentApp {
                     LayerKind::Adjustment(a) => a.encode(),
                     _ => (0, [0.0; 4]),
                 };
+                let blend_if = self.blend_if.get(&l.id).copied();
                 LayerDraw {
                     id: l.id,
                     opacity: l.opacity,
@@ -1115,6 +1124,8 @@ impl PigmentApp {
                     visible: l.visible,
                     adjust_kind,
                     adjust,
+                    has_blend_if: blend_if.is_some(),
+                    blend_if: blend_if.unwrap_or([0.0, 1.0, 0.0, 1.0]),
                 }
             })
             .collect()
@@ -2217,6 +2228,27 @@ impl eframe::App for PigmentApp {
                 ) {
                     ui.label("Shift: add · Alt: subtract.");
                 }
+
+                ui.separator();
+                egui::CollapsingHeader::new("Blend-If").show(ui, |ui| {
+                    let id = self.active_id();
+                    let mut enabled = self.blend_if.contains_key(&id);
+                    if ui.checkbox(&mut enabled, "enable (active layer)").changed() {
+                        if enabled {
+                            self.blend_if.insert(id, [0.0, 1.0, 0.0, 1.0]);
+                        } else {
+                            self.blend_if.remove(&id);
+                        }
+                    }
+                    if let Some(bi) = self.blend_if.get_mut(&id) {
+                        ui.label("This layer");
+                        ui.add(egui::Slider::new(&mut bi[0], 0.0..=1.0).text("black"));
+                        ui.add(egui::Slider::new(&mut bi[1], 0.0..=1.0).text("white"));
+                        ui.label("Underlying");
+                        ui.add(egui::Slider::new(&mut bi[2], 0.0..=1.0).text("black"));
+                        ui.add(egui::Slider::new(&mut bi[3], 0.0..=1.0).text("white"));
+                    }
+                });
 
                 ui.separator();
                 egui::CollapsingHeader::new("Histogram").show(ui, |ui| {

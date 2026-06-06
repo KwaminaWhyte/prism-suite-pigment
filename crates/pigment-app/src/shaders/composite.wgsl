@@ -11,6 +11,11 @@ struct Params {
     off: vec2<f32>,  // uv-space offset
     _p1: vec2<f32>,
     adjust: vec4<f32>, // adjustment params
+    has_blend_if: u32,
+    _p2a: u32, // scalar pads (NOT vec3 — vec3 would force 16-byte align, mismatching [u32;3])
+    _p2b: u32,
+    _p2c: u32,
+    blend_if: vec4<f32>, // this_black, this_white, under_black, under_white
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -39,6 +44,15 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 }
 
 fn lum(c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.3, 0.59, 0.11)); }
+
+// Blend-If keep factor: 1 when luma x is inside [lo, hi], ramping to 0 just
+// outside (soft 0.05 feather), à la Photoshop's this/underlying sliders.
+fn blend_if_factor(x: f32, lo: f32, hi: f32) -> f32 {
+    let f = 0.05;
+    let lower = smoothstep(lo, lo + f, x);
+    let upper = 1.0 - smoothstep(hi - f, hi, x);
+    return clamp(lower * upper, 0.0, 1.0);
+}
 
 fn clip_color(c: vec3<f32>) -> vec3<f32> {
     let l = lum(c);
@@ -220,6 +234,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         * (params.opacity * mask);
     if !in_bounds {
         s = vec4<f32>(0.0);
+    }
+
+    // Blend-If: gate the source by its own luma + the backdrop's luma.
+    if params.has_blend_if != 0u {
+        let s_lum = lum(s.rgb / max(s.a, 1e-5));
+        let b_lum = lum(b.rgb / max(b.a, 1e-5));
+        let f = blend_if_factor(s_lum, params.blend_if.x, params.blend_if.y)
+              * blend_if_factor(b_lum, params.blend_if.z, params.blend_if.w);
+        s = s * f;
     }
 
     let sa = max(s.a, 1e-5);

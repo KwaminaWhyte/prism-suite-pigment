@@ -30,6 +30,9 @@ pub struct LayerDraw {
     /// 0 = raster layer; else an adjustment kind applied to the backdrop.
     pub adjust_kind: u32,
     pub adjust: [f32; 4],
+    /// Blend-If: gate the layer by its own + the backdrop's luma.
+    pub has_blend_if: bool,
+    pub blend_if: [f32; 4], // [this_black, this_white, under_black, under_white]
 }
 
 /// A selection operation requested by the app for this frame.
@@ -116,6 +119,10 @@ struct CompositeParams {
     off: [f32; 2],
     _p1: [f32; 2],
     adjust: [f32; 4],
+    has_blend_if: u32,
+    _p2: [u32; 3],
+    /// Blend-If luma ranges: [this_black, this_white, under_black, under_white].
+    blend_if: [f32; 4],
 }
 
 impl CompositeParams {
@@ -129,6 +136,9 @@ impl CompositeParams {
             off: [0.0; 2],
             _p1: [0.0; 2],
             adjust: [0.0; 4],
+            has_blend_if: 0,
+            _p2: [0; 3],
+            blend_if: [0.0, 1.0, 0.0, 1.0],
         }
     }
 }
@@ -901,6 +911,9 @@ impl CanvasGpu {
             off: self.xform_off,
             _p1: [0.0; 2],
             adjust: [0.0; 4],
+            has_blend_if: 0,
+            _p2: [0; 3],
+            blend_if: [0.0, 1.0, 0.0, 1.0],
         };
         queue.write_buffer(
             &self.params_buf,
@@ -1984,6 +1997,10 @@ impl CanvasGpu {
             let mut p = CompositeParams::plain(l.opacity, l.blend);
             p.adjust_kind = l.adjust_kind;
             p.adjust = l.adjust;
+            if l.has_blend_if {
+                p.has_blend_if = 1;
+                p.blend_if = l.blend_if;
+            }
             if self.xform_layer == Some(l.id) {
                 p.has_xform = 1;
                 p.m = self.xform_m;
@@ -2501,6 +2518,8 @@ mod gpu_tests {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            has_blend_if: false,
+            blend_if: [0.0, 1.0, 0.0, 1.0],
         }];
         let p = gpu.composite_now(&device, &queue, &order);
         let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
@@ -2566,6 +2585,8 @@ mod gpu_tests {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            has_blend_if: false,
+            blend_if: [0.0, 1.0, 0.0, 1.0],
         }];
 
         // Select the left half, then paint blue over the whole canvas.
@@ -2654,6 +2675,8 @@ mod gpu_tests {
                 visible: true,
                 adjust_kind: 0,
                 adjust: [0.0; 4],
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
             },
             LayerDraw {
                 id: l1,
@@ -2662,6 +2685,8 @@ mod gpu_tests {
                 visible: true,
                 adjust_kind: k,
                 adjust: p,
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
             },
         ];
         let pp = gpu.composite_now(&device, &queue, &order);
@@ -2703,6 +2728,8 @@ mod gpu_tests {
                 visible: true,
                 adjust_kind: 0,
                 adjust: [0.0; 4],
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
             },
             LayerDraw {
                 id: l1,
@@ -2711,6 +2738,8 @@ mod gpu_tests {
                 visible: true,
                 adjust_kind: 8, // Curves
                 adjust: [0.0; 4],
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
             },
         ];
         let pp = gpu.composite_now(&device, &queue, &order);
@@ -2796,6 +2825,8 @@ mod gpu_tests {
                 visible: true,
                 adjust_kind: 0,
                 adjust: [0.0; 4],
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
             },
             LayerDraw {
                 id: l1,
@@ -2804,6 +2835,8 @@ mod gpu_tests {
                 visible: true,
                 adjust_kind: k,
                 adjust: p,
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
             },
         ];
         let pp = gpu.composite_now(&device, &queue, &order);
@@ -2811,6 +2844,55 @@ mod gpu_tests {
         assert!(
             px[0] > 0.9,
             "posterize(2) snaps mid gray up to white: {px:?}"
+        );
+    }
+
+    // Blend-If: a gray top layer with "this layer white" pulled below its luma is
+    // hidden, revealing the white layer beneath.
+    #[test]
+    fn blend_if_hides_bright_source() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping blend_if_hides_bright_source");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        let l1 = LayerId(1);
+        gpu.ensure_layer(&device, l0);
+        gpu.ensure_layer(&device, l1);
+        gpu.upload_layer(&queue, l0, &solid(8, 1.0, 1.0, 1.0, 1.0)); // white base
+        gpu.upload_layer(&queue, l1, &solid(8, 0.5, 0.5, 0.5, 1.0)); // gray top
+
+        // this_white = 0.45 < gray luma 0.5 -> top fully gated out.
+        let order = vec![
+            LayerDraw {
+                id: l0,
+                opacity: 1.0,
+                blend: 0,
+                visible: true,
+                adjust_kind: 0,
+                adjust: [0.0; 4],
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
+            },
+            LayerDraw {
+                id: l1,
+                opacity: 1.0,
+                blend: 0,
+                visible: true,
+                adjust_kind: 0,
+                adjust: [0.0; 4],
+                has_blend_if: true,
+                blend_if: [0.0, 0.45, 0.0, 1.0],
+            },
+        ];
+        let pp = gpu.composite_now(&device, &queue, &order);
+        let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
+        assert!(
+            px[0] > 0.9,
+            "blend-if hides gray top -> white shows through: {px:?}"
         );
     }
 
@@ -2841,6 +2923,8 @@ mod gpu_tests {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            has_blend_if: false,
+            blend_if: [0.0, 1.0, 0.0, 1.0],
         }];
         let p = gpu.composite_now(&device, &queue, &order);
         let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
