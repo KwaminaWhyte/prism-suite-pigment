@@ -30,9 +30,10 @@ enum Tool {
     MoveLayer, // translate the active layer
     Brush,
     Eraser,
-    Clone,    // clone stamp: Alt-click sets source, drag stamps from it
-    Heal,     // healing brush: Alt-click source, brush region, gradient-domain heal on release
-    SpotHeal, // spot heal: brush a blemish, auto-source + heal on release (no manual source)
+    Clone,       // clone stamp: Alt-click sets source, drag stamps from it
+    Heal,        // healing brush: Alt-click source, brush region, gradient-domain heal on release
+    SpotHeal,    // spot heal: brush a blemish, auto-source + heal on release (no manual source)
+    ContentFill, // content-aware fill: brush a region, PatchMatch-synthesize from surroundings
     Fill,
     Eyedropper,
     SelectRect,
@@ -541,6 +542,47 @@ impl PigmentApp {
                 img[p * 4 + 3] = a;
             }
             let solved = prism_core::heal::spot_heal(&img, &mask, w, h, 250);
+            let mut out = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = solved[p * 4 + 3];
+                out[p * 4] = solved[p * 4] * a;
+                out[p * 4 + 1] = solved[p * 4 + 1] * a;
+                out[p * 4 + 2] = solved[p * 4 + 2] * a;
+                out[p * 4 + 3] = a;
+            }
+            gpu.upload_layer(q, active, &f32_to_f16_bytes(&out));
+        });
+        self.force_composite = true;
+    }
+
+    /// Content-aware fill on release: synthesize the brushed region from the
+    /// surrounding texture (`prism_core::inpaint::content_aware_fill`, PatchMatch).
+    fn do_content_fill(&mut self, frame: &mut eframe::Frame) {
+        if !self.heal_mask.iter().any(|&m| m) {
+            return;
+        }
+        let (w, h) = (self.doc.size.width as usize, self.doc.size.height as usize);
+        if self.heal_mask.len() != w * h {
+            return;
+        }
+        let active = self.active_id();
+        let mask = std::mem::take(&mut self.heal_mask);
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, "Content-Aware Fill");
+            let Some(bytes) = gpu.read_layer(d, q, active) else {
+                return;
+            };
+            let prem = f16_bytes_to_f32(&bytes);
+            let mut img = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = prem[p * 4 + 3];
+                let inv = if a > 1e-5 { 1.0 / a } else { 0.0 };
+                img[p * 4] = prem[p * 4] * inv;
+                img[p * 4 + 1] = prem[p * 4 + 1] * inv;
+                img[p * 4 + 2] = prem[p * 4 + 2] * inv;
+                img[p * 4 + 3] = a;
+            }
+            let solved = prism_core::inpaint::content_aware_fill(&img, &mask, w, h, 3, 6);
             let mut out = vec![0.0f32; w * h * 4];
             for p in 0..w * h {
                 let a = solved[p * 4 + 3];
@@ -1849,6 +1891,11 @@ impl eframe::App for PigmentApp {
                         icons::SPOT_HEAL,
                         "Spot heal (auto-source; heals on release)",
                     ),
+                    (
+                        Tool::ContentFill,
+                        icons::CONTENT_FILL,
+                        "Content-aware fill (brush region; PatchMatch on release)",
+                    ),
                     (Tool::Fill, icons::FILL, "Bucket fill"),
                     (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
                     (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
@@ -2555,6 +2602,43 @@ impl eframe::App for PigmentApp {
                                 && response.interact_pointer_pos().is_none())
                         {
                             self.do_spot_heal(frame);
+                            self.stroke_last = None;
+                        }
+                    }
+                    Tool::ContentFill => {
+                        let r = self.brush_size * 0.5;
+                        if let Some(p) = response.interact_pointer_pos() {
+                            let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                            match self.stroke_last {
+                                None => {
+                                    let n = (self.doc.size.width * self.doc.size.height) as usize;
+                                    self.heal_mask = vec![false; n];
+                                    self.heal_mark(cur, r);
+                                    self.stroke_last = Some(cur);
+                                }
+                                Some(last) => {
+                                    let seg = cur - last;
+                                    let dist = seg.length();
+                                    if dist > 1e-3 {
+                                        let dir = seg / dist;
+                                        let step = (r * 0.5).max(1.0);
+                                        let mut t = 0.0;
+                                        while t <= dist {
+                                            self.heal_mark(last + dir * t, r);
+                                            t += step;
+                                        }
+                                        self.heal_mark(cur, r);
+                                        self.stroke_last = Some(cur);
+                                    }
+                                }
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped()
+                            || (self.stroke_last.is_some()
+                                && response.interact_pointer_pos().is_none())
+                        {
+                            self.do_content_fill(frame);
                             self.stroke_last = None;
                         }
                     }

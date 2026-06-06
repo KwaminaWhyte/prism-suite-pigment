@@ -55,6 +55,8 @@ pub const CLONE: &str = ph::STAMP;
 pub const HEAL: &str = ph::BANDAIDS;
 /// Spot-healing tool (auto-source).
 pub const SPOT_HEAL: &str = ph::SPARKLE;
+/// Content-aware fill tool (PatchMatch synthesis).
+pub const CONTENT_FILL: &str = ph::MAGIC_WAND;
 /// Fill / paint-bucket tool.
 pub const FILL: &str = ph::PAINT_BUCKET;
 /// Eyedropper / color-pick tool.

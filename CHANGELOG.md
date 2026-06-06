@@ -7,6 +7,11 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Content-Aware Fill** (Phase 6 retouch). Brush a region; on release
+  `prism_core::inpaint::content_aware_fill` synthesizes it from the surrounding
+  texture via PatchMatch (approximate-NNF propagation + random search + patch
+  voting, deterministic). Better than translate-and-blend for textured fills /
+  larger removals. Unit-tested (uniform fill, content-awareness, determinism).
 - **Spot Healing** (Phase 6 retouch). Brush over a blemish — **no manual source**;
   on release `prism_core::heal::spot_heal` auto-finds a clean nearby source by
   scoring boundary-ring match across candidate translations, then gradient-domain
