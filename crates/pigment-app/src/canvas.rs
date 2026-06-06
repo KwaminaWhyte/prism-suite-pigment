@@ -158,6 +158,8 @@ struct Snapshot {
 
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const SEL_FMT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+/// Width of a Curves tone-curve LUT (256 input levels, 1px tall, Rgba16Float).
+const LUT_W: u32 = 256;
 const MAX_LAYERS: u64 = 64;
 const PARAMS_STRIDE: u64 = 256; // min uniform dynamic-offset alignment
 const UNDO_MAX: usize = 32;
@@ -180,6 +182,34 @@ const ERASE_BLEND: wgpu::BlendState = wgpu::BlendState {
 
 fn make_target(device: &wgpu::Device, size: Size, label: &str) -> GpuLayer {
     make_target_fmt(device, size, label, FMT)
+}
+
+/// A 256×1 Rgba16Float tone-curve LUT target.
+fn make_lut_target(device: &wgpu::Device, label: &str) -> GpuLayer {
+    make_target_fmt(device, Size::new(LUT_W, 1), label, FMT)
+}
+
+/// Upload `LUT_W*4` f16 texels (interleaved rgba) into a LUT texture.
+fn write_lut(queue: &wgpu::Queue, tex: &wgpu::Texture, texels: &[half::f16]) {
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytemuck::cast_slice(texels),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(LUT_W * 4 * 2), // rgba * 2 bytes (f16)
+            rows_per_image: Some(1),
+        },
+        wgpu::Extent3d {
+            width: LUT_W,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 fn make_target_fmt(
@@ -242,6 +272,11 @@ pub struct CanvasGpu {
 
     // Document state mirror.
     layers: HashMap<LayerId, GpuLayer>,
+    /// Per-Curves-layer 256×1 LUT textures (rgba = r/g/b/master tone curves).
+    curve_luts: HashMap<LayerId, GpuLayer>,
+    /// Identity LUT bound to composite passes that have no Curves layer (the
+    /// shader only samples it when `adjust_kind == 8`, so it must still be valid).
+    identity_lut: Option<GpuLayer>,
     canvas_size: Size,
     ping: Option<GpuLayer>,
     pong: Option<GpuLayer>,
@@ -327,6 +362,7 @@ impl CanvasGpu {
                     count: None,
                 },
                 tex_entry(4),
+                tex_entry(5),
             ],
         });
         let composite_pipeline = make_render_pipeline(
@@ -551,6 +587,8 @@ impl CanvasGpu {
             display_uniform,
             display_bind_group: None,
             layers: HashMap::new(),
+            curve_luts: HashMap::new(),
+            identity_lut: None,
             canvas_size: Size::new(1, 1),
             ping: None,
             pong: None,
@@ -777,6 +815,7 @@ impl CanvasGpu {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         self.ensure_white(queue);
+        self.ensure_identity_lut(device, queue);
         let Some(id) = self.xform_layer else { return };
         let (Some(layer), Some(ping), Some(pong)) =
             (self.layers.get(&id), self.ping.as_ref(), self.pong.as_ref())
@@ -838,6 +877,12 @@ impl CanvasGpu {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&self.white_mask.view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.identity_lut.as_ref().unwrap().view,
+                    ),
+                },
             ],
         });
         {
@@ -878,6 +923,7 @@ impl CanvasGpu {
         self.stroke_owner = None;
         self.stroke_pre = None;
         self.layers.clear(); // new document
+        self.curve_luts.clear();
         self.masks.clear();
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -892,6 +938,59 @@ impl CanvasGpu {
 
     pub fn drop_layer(&mut self, id: LayerId) {
         self.layers.remove(&id);
+        self.curve_luts.remove(&id);
+    }
+
+    /// Lazily build the identity LUT (ramp in every channel). Needed before any
+    /// composite-layout bind group is created (the binding must be valid even
+    /// when unused).
+    fn ensure_identity_lut(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.identity_lut.is_some() {
+            return;
+        }
+        let t = make_lut_target(device, "lut.identity");
+        let n = LUT_W as usize;
+        let mut texels = vec![half::f16::from_f32(0.0); n * 4];
+        for (i, px) in texels.chunks_mut(4).enumerate() {
+            let v = half::f16::from_f32(i as f32 / (n - 1) as f32);
+            px[0] = v;
+            px[1] = v;
+            px[2] = v;
+            px[3] = v;
+        }
+        write_lut(queue, &t.tex, &texels);
+        self.identity_lut = Some(t);
+    }
+
+    /// Build + upload a Curves layer's tone-curve LUT from per-channel control
+    /// points. `rgb` is the composite (master) curve; `r`/`g`/`b` are per-channel.
+    pub fn set_curve_lut(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        rgb: &[(f32, f32)],
+        r: &[(f32, f32)],
+        g: &[(f32, f32)],
+        b: &[(f32, f32)],
+    ) {
+        let n = LUT_W as usize;
+        let lm = prism_core::curve::build_lut(rgb, n);
+        let lr = prism_core::curve::build_lut(r, n);
+        let lg = prism_core::curve::build_lut(g, n);
+        let lb = prism_core::curve::build_lut(b, n);
+        let mut texels = vec![half::f16::from_f32(0.0); n * 4];
+        for (i, px) in texels.chunks_mut(4).enumerate() {
+            px[0] = half::f16::from_f32(lr[i]);
+            px[1] = half::f16::from_f32(lg[i]);
+            px[2] = half::f16::from_f32(lb[i]);
+            px[3] = half::f16::from_f32(lm[i]);
+        }
+        let t = self
+            .curve_luts
+            .entry(id)
+            .or_insert_with(|| make_lut_target(device, "lut.curve"));
+        write_lut(queue, &t.tex, &texels);
     }
 
     /// Upload raw RGBA16F (linear premultiplied) bytes into a layer.
@@ -1510,6 +1609,7 @@ impl CanvasGpu {
         let Some(owner) = self.wet_owner.take() else {
             return;
         };
+        self.ensure_identity_lut(device, queue);
         let (Some(layer), Some(wet), Some(pong)) = (
             self.layers.get(&owner),
             self.wet.as_ref(),
@@ -1549,6 +1649,12 @@ impl CanvasGpu {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&self.white_mask.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.identity_lut.as_ref().unwrap().view,
+                    ),
                 },
             ],
         });
@@ -1680,6 +1786,7 @@ impl CanvasGpu {
         order: &[LayerDraw],
     ) -> bool {
         self.ensure_white(queue);
+        self.ensure_identity_lut(device, queue);
 
         // Write all layer params up front (one buffer, dynamic offsets).
         let visible: Vec<&LayerDraw> = order.iter().filter(|l| l.visible).collect();
@@ -1708,20 +1815,38 @@ impl CanvasGpu {
 
         let ping = self.ping.as_ref().unwrap();
         let pong = self.pong.as_ref().unwrap();
+        let identity_lut = &self.identity_lut.as_ref().unwrap().view;
 
-        // Ordered passes: each visible layer, plus the wet stroke just above its
-        // owner so the in-progress stroke previews at the right depth.
-        let mut passes: Vec<(&wgpu::TextureView, u32, &wgpu::TextureView)> = Vec::new();
+        // Ordered passes: each visible layer (+ its Curves LUT, or the identity
+        // LUT), plus the wet stroke just above its owner so the in-progress
+        // stroke previews at the right depth.
+        let mut passes: Vec<(
+            &wgpu::TextureView,
+            u32,
+            &wgpu::TextureView,
+            &wgpu::TextureView,
+        )> = Vec::new();
         for (i, l) in visible.iter().enumerate() {
             if let Some(layer) = self.layers.get(&l.id) {
+                let lut = self
+                    .curve_luts
+                    .get(&l.id)
+                    .map(|g| &g.view)
+                    .unwrap_or(identity_lut);
                 passes.push((
                     &layer.view,
                     (i as u64 * PARAMS_STRIDE) as u32,
                     self.mask_view(l.id),
+                    lut,
                 ));
                 if self.wet_owner == Some(l.id) {
                     if let Some(wet) = self.wet.as_ref() {
-                        passes.push((&wet.view, WET_PARAMS_OFFSET, &self.white_mask.view));
+                        passes.push((
+                            &wet.view,
+                            WET_PARAMS_OFFSET,
+                            &self.white_mask.view,
+                            identity_lut,
+                        ));
                     }
                 }
             }
@@ -1740,7 +1865,7 @@ impl CanvasGpu {
         }
 
         let mut src_is_ping = true;
-        for (layer_view, offset, mask_view) in passes {
+        for (layer_view, offset, mask_view, lut_view) in passes {
             let (src, dst) = if src_is_ping {
                 (ping, pong)
             } else {
@@ -1775,6 +1900,10 @@ impl CanvasGpu {
                     wgpu::BindGroupEntry {
                         binding: 4,
                         resource: wgpu::BindingResource::TextureView(mask_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(lut_view),
                     },
                 ],
             });
@@ -2332,6 +2461,54 @@ mod gpu_tests {
         assert!(
             px[0] < 0.2 && px[1] > 0.8 && px[2] > 0.8,
             "invert red -> cyan: {px:?}"
+        );
+    }
+
+    // A Curves adjustment layer with an inverting master curve turns red -> cyan,
+    // exercising the full LUT build + upload + shader-sample path.
+    #[test]
+    fn curves_invert_master() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping curves_invert_master");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        let l1 = LayerId(1);
+        gpu.ensure_layer(&device, l0);
+        gpu.ensure_layer(&device, l1); // adjustment layer (no pixels needed)
+        gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
+
+        // Master curve inverts (0->1, 1->0); per-channel curves stay identity.
+        let inv = [(0.0, 1.0), (1.0, 0.0)];
+        let idc = [(0.0, 0.0), (1.0, 1.0)];
+        gpu.set_curve_lut(&device, &queue, l1, &inv, &idc, &idc, &idc);
+
+        let order = vec![
+            LayerDraw {
+                id: l0,
+                opacity: 1.0,
+                blend: 0,
+                visible: true,
+                adjust_kind: 0,
+                adjust: [0.0; 4],
+            },
+            LayerDraw {
+                id: l1,
+                opacity: 1.0,
+                blend: 0,
+                visible: true,
+                adjust_kind: 8, // Curves
+                adjust: [0.0; 4],
+            },
+        ];
+        let pp = gpu.composite_now(&device, &queue, &order);
+        let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
+        assert!(
+            px[0] < 0.2 && px[1] > 0.8 && px[2] > 0.8,
+            "curves invert red -> cyan: {px:?}"
         );
     }
 

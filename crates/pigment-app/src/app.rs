@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use eframe::egui_wgpu;
 use eframe::wgpu;
 use half::f16;
-use prism_core::adjust::Adjustment;
+use prism_core::adjust::{Adjustment, CurvePoints};
 use prism_core::color::{linear_to_srgb, srgb_to_linear};
 use prism_core::fill::flood_fill_mask;
 use prism_core::histogram::{self, Histogram};
@@ -261,6 +261,29 @@ impl PigmentApp {
 
     /// Re-rasterize any text/vector layer whose definition changed, uploading
     /// the result to its layer texture (keeps them editable after creation).
+    /// Build + upload the GPU tone-curve LUT for every Curves adjustment layer.
+    /// Cheap (a few 256-entry tables) and only called on a recomposite frame.
+    fn sync_curve_luts(&mut self, frame: &mut eframe::Frame) {
+        let curves: Vec<(LayerId, CurvePoints)> = self
+            .doc
+            .layers
+            .layers
+            .iter()
+            .filter_map(|l| match &l.kind {
+                LayerKind::Adjustment(Adjustment::Curves(cp)) => Some((l.id, cp.clone())),
+                _ => None,
+            })
+            .collect();
+        if curves.is_empty() {
+            return;
+        }
+        with_gpu(frame, |gpu, device, queue| {
+            for (id, cp) in &curves {
+                gpu.set_curve_lut(device, queue, *id, &cp.rgb, &cp.r, &cp.g, &cp.b);
+            }
+        });
+    }
+
     fn sync_generated_layers(&mut self, frame: &mut eframe::Frame) {
         use std::hash::{Hash, Hasher};
         let (w, h) = (self.doc.size.width, self.doc.size.height);
@@ -667,6 +690,16 @@ impl PigmentApp {
                 k.hash(&mut h);
                 for v in p {
                     v.to_bits().hash(&mut h);
+                }
+                // encode() can't carry Curves control points — hash them directly.
+                if let Adjustment::Curves(cp) = a {
+                    for ch in [&cp.rgb, &cp.r, &cp.g, &cp.b] {
+                        ch.len().hash(&mut h);
+                        for (x, y) in ch {
+                            x.to_bits().hash(&mut h);
+                            y.to_bits().hash(&mut h);
+                        }
+                    }
                 }
             }
         }
@@ -1297,9 +1330,145 @@ fn adjustment_ui(ui: &mut egui::Ui, adj: &mut Adjustment) {
         Adjustment::Threshold { level } => {
             ui.add(egui::Slider::new(level, 0.0..=1.0).text("level"));
         }
+        Adjustment::Curves(cp) => {
+            curve_editor(ui, cp);
+        }
         Adjustment::Invert | Adjustment::BlackWhite => {
             ui.label("(no parameters)");
         }
+    }
+}
+
+/// Draggable tone-curve editor for a Curves adjustment. A channel selector picks
+/// the composite (RGB) or per-channel curve; drag a knot to move it, click empty
+/// canvas to add one, double-click a knot to delete it. Endpoints stay pinned in
+/// x (only their output moves). Curve points live in `[0,1]` with y = output up.
+fn curve_editor(ui: &mut egui::Ui, cp: &mut CurvePoints) {
+    let chan_id = ui.id().with("curve_chan");
+    let mut chan: usize = ui.data(|d| d.get_temp(chan_id)).unwrap_or(0);
+    ui.horizontal(|ui| {
+        for (i, name) in ["RGB", "R", "G", "B"].iter().enumerate() {
+            if ui.selectable_label(chan == i, *name).clicked() {
+                chan = i;
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(chan_id, chan));
+    let pts = match chan {
+        1 => &mut cp.r,
+        2 => &mut cp.g,
+        3 => &mut cp.b,
+        _ => &mut cp.rgb,
+    };
+
+    let side = ui.available_width().clamp(120.0, 240.0);
+    let (resp, painter) =
+        ui.allocate_painter(egui::vec2(side, side), egui::Sense::click_and_drag());
+    let rect = resp.rect;
+    let to_screen = |p: (f32, f32)| {
+        egui::pos2(
+            rect.left() + p.0 * rect.width(),
+            rect.bottom() - p.1 * rect.height(),
+        )
+    };
+    let to_norm = |pos: egui::Pos2| {
+        (
+            ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
+            ((rect.bottom() - pos.y) / rect.height()).clamp(0.0, 1.0),
+        )
+    };
+
+    // Background + grid + identity diagonal.
+    painter.rect_filled(rect, 4.0, egui::Color32::from_gray(24));
+    let grid = egui::Stroke::new(1.0, egui::Color32::from_gray(48));
+    for i in 1..4 {
+        let t = i as f32 / 4.0;
+        painter.line_segment([to_screen((t, 0.0)), to_screen((t, 1.0))], grid);
+        painter.line_segment([to_screen((0.0, t)), to_screen((1.0, t))], grid);
+    }
+    painter.line_segment(
+        [to_screen((0.0, 0.0)), to_screen((1.0, 1.0))],
+        egui::Stroke::new(1.0, egui::Color32::from_gray(64)),
+    );
+
+    // Drag/click interaction.
+    let drag_id = ui.id().with("curve_drag");
+    let mut dragging: Option<usize> = ui.data(|d| d.get_temp::<Option<usize>>(drag_id)).flatten();
+    if resp.drag_started() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            // Grab the nearest knot within ~12px, else add a new one at the pointer.
+            let mut best = None;
+            let mut best_d = 12.0f32;
+            for (i, &p) in pts.iter().enumerate() {
+                let d = to_screen(p).distance(pos);
+                if d < best_d {
+                    best_d = d;
+                    best = Some(i);
+                }
+            }
+            dragging = Some(best.unwrap_or_else(|| {
+                let (x, y) = to_norm(pos);
+                pts.push((x, y));
+                pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                pts.iter().position(|p| p.0 == x && p.1 == y).unwrap_or(0)
+            }));
+        }
+    }
+    if resp.dragged() {
+        if let (Some(idx), Some(pos)) = (dragging, resp.interact_pointer_pos()) {
+            let (mut x, y) = to_norm(pos);
+            // Pin endpoint x; interior knots can't cross neighbours.
+            if idx == 0 {
+                x = 0.0;
+            } else if idx == pts.len() - 1 {
+                x = 1.0;
+            } else {
+                let lo = pts[idx - 1].0 + 1e-3;
+                let hi = pts[idx + 1].0 - 1e-3;
+                x = x.clamp(lo, hi);
+            }
+            pts[idx] = (x, y);
+        }
+    }
+    if resp.drag_stopped() {
+        dragging = None;
+    }
+    ui.data_mut(|d| d.insert_temp(drag_id, dragging));
+
+    // Double-click a knot to delete it (keep at least the two endpoints).
+    if resp.double_clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            if pts.len() > 2 {
+                if let Some((i, _)) = pts
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != 0 && *i != pts.len() - 1)
+                    .map(|(i, p)| (i, to_screen(*p).distance(pos)))
+                    .filter(|(_, d)| *d < 12.0)
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                {
+                    pts.remove(i);
+                }
+            }
+        }
+    }
+
+    // Spline + knots.
+    let lut = prism_core::curve::build_lut(pts, 128);
+    let line: Vec<egui::Pos2> = (0..128)
+        .map(|i| to_screen((i as f32 / 127.0, lut[i])))
+        .collect();
+    painter.add(egui::Shape::line(
+        line,
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 200, 255)),
+    ));
+    for &p in pts.iter() {
+        painter.circle(
+            to_screen(p),
+            3.5,
+            egui::Color32::WHITE,
+            egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
+        );
     }
 }
 
@@ -1648,7 +1817,7 @@ impl eframe::App for PigmentApp {
                         self.doc.active_layer = Some(id);
                     }
                     ui.menu_button("Adj", |ui| {
-                        for adj in Adjustment::DEFAULTS {
+                        for adj in Adjustment::defaults() {
                             if ui.button(adj.name()).clicked() {
                                 let id = self.doc.layers.add_adjustment(adj);
                                 self.doc.active_layer = Some(id);
@@ -2235,6 +2404,11 @@ impl eframe::App for PigmentApp {
                 };
                 self.last_fingerprint = fp;
                 self.force_composite = false;
+
+                // Upload Curves LUTs before the paint callback composites.
+                if dirty {
+                    self.sync_curve_luts(frame);
+                }
 
                 // Keep marching ants animating while a selection is active.
                 if self.selection_active {

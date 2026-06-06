@@ -210,7 +210,7 @@ pigment/
 - [x] Tests: core `adjust`/`curve`/`histogram` + GPU adjustment-invert & layer-mask
 - [x] **DoD met:** non-destructive adjustment stack + masks + core filters
 
-**Deferred (polish):** Curves spline-editor UI (the monotone-cubic LUT builder exists in `pigment_core::curve`, only the draggable widget + a Curves adjustment kind remain); Color Balance / per-channel curves; clipping & group masks; layer styles (stroke/shadow/glow); motion blur / noise.
+**Deferred (polish):** ~~Curves spline-editor UI~~ (**done** — see Phase 4); Color Balance; clipping & group masks; layer styles (stroke/shadow/glow); motion blur / noise.
 
 ### Phase 4 — Text, vector, smart objects  *(MOSTLY COMPLETE)*
 - [x] Text layers (`cosmic-text` rasterizer → layer texture): editable text/size/color/align, re-rasterized on edit
@@ -225,7 +225,7 @@ pigment/
 - [ ] More shapes: polygon, line, rounded-rect (live corner radius), custom-shape from path; shape stroke + fill + dashes
 - [ ] Boolean shape ops (`i_overlay`): unite / subtract / intersect / exclude on selected shapes
 - [ ] Vector masks (path clips a layer; composite multiplies α by rasterized path coverage) + clipping masks (layer clipped to one below) + group masks
-- [ ] Curves adjustment **UI** (draggable monotone-cubic widget already in `prism_core::curve`) + per-channel curves
+- [x] Curves adjustment **UI** (draggable monotone-cubic editor; composite **+ per-channel R/G/B** curves; LUT uploaded as a 256×1 texture, sampled in the compositor; GPU-pixel-tested)
 - [ ] Gradient editor: multi-stop, opacity stops, linear/radial/angle/reflected/diamond types, dithering; saved presets
 - [ ] Pattern fill / pattern stamp + define-pattern from selection
 - [ ] **Type richness:** character + paragraph panels (kerning/tracking/leading, OpenType features, justification), text-on-path, warp text, type masks

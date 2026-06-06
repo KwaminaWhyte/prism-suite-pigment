@@ -18,6 +18,7 @@ struct Params {
 @group(0) @binding(2) var layer_tex: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> params: Params;
 @group(0) @binding(4) var mask_tex: texture_2d<f32>; // R = layer mask (1x1 white if none)
+@group(0) @binding(5) var lut_tex: texture_2d<f32>;  // Curves LUT 256x1: rgba = (rCurve, gCurve, bCurve, masterCurve)
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -134,6 +135,19 @@ fn hsl2rgb(h: f32, s: f32, l: f32) -> vec3<f32> {
     return vec3<f32>(hue2rgb(p, q, h + 1.0 / 3.0), hue2rgb(p, q, h), hue2rgb(p, q, h - 1.0 / 3.0));
 }
 
+// Curves: master (composite) curve first — stored in the LUT's .a — then the
+// per-channel curves (.rgb). textureSampleLevel (explicit LOD) so it's legal in
+// the conditional adjustment branch. Identity LUT => no-op.
+fn apply_curves(c: vec3<f32>) -> vec3<f32> {
+    let mr = textureSampleLevel(lut_tex, samp, vec2<f32>(c.r, 0.5), 0.0).a;
+    let mg = textureSampleLevel(lut_tex, samp, vec2<f32>(c.g, 0.5), 0.0).a;
+    let mb = textureSampleLevel(lut_tex, samp, vec2<f32>(c.b, 0.5), 0.0).a;
+    let cr = textureSampleLevel(lut_tex, samp, vec2<f32>(mr, 0.5), 0.0).r;
+    let cg = textureSampleLevel(lut_tex, samp, vec2<f32>(mg, 0.5), 0.0).g;
+    let cb = textureSampleLevel(lut_tex, samp, vec2<f32>(mb, 0.5), 0.0).b;
+    return vec3<f32>(cr, cg, cb);
+}
+
 fn apply_adjust(kind: u32, p: vec4<f32>, c_lin: vec3<f32>) -> vec3<f32> {
     if kind == 5u {
         return c_lin * exp2(p.x); // exposure: linear-light multiply
@@ -156,6 +170,7 @@ fn apply_adjust(kind: u32, p: vec4<f32>, c_lin: vec3<f32>) -> vec3<f32> {
         case 4u: { c = 1.0 - c; }
         case 6u: { let y = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)); c = vec3<f32>(select(0.0, 1.0, y >= p.x)); }
         case 7u: { c = vec3<f32>(dot(c, vec3<f32>(0.2126, 0.7152, 0.0722))); }
+        case 8u: { c = clamp(apply_curves(c), vec3<f32>(0.0), vec3<f32>(1.0)); }
         default: {}
     }
     return s2l(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
