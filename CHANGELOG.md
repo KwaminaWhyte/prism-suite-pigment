@@ -7,6 +7,10 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Detail brush** (Phase 6). One brush, four modes — **Saturate / Desaturate**
+  (sponge, `prism_core::tone::sponge`) and **Blur / Sharpen**
+  (`prism_core::detail::blur_sharpen`) — applied over a soft brushed coverage mask
+  on release. Unit-tested core math.
 - **Liquify** (Phase 6). Mesh warp via a per-pixel displacement field with
   **Push / Twirl / Pucker / Bloat** modes (panel selector). Live preview
   re-warps a frozen snapshot each frame (no compounding blur);

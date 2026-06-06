@@ -36,6 +36,7 @@ enum Tool {
     ContentFill, // content-aware fill: brush a region, PatchMatch-synthesize from surroundings
     Dodge,       // dodge (lighten) / burn (darken with Alt) — brushed soft tonal adjust
     Liquify,     // mesh warp: push/twirl/pucker/bloat via a displacement field
+    Detail,      // detail brush: saturate/desaturate (sponge), blur, sharpen
     Fill,
     Eyedropper,
     SelectRect,
@@ -151,6 +152,7 @@ pub struct PigmentApp {
     liquify_src: Vec<f32>,
     liquify_disp: Vec<[f32; 2]>,
     liquify_mode: u8, // 0 push, 1 twirl, 2 pucker, 3 bloat
+    detail_mode: u8,  // 0 saturate, 1 desaturate, 2 blur, 3 sharpen
     undo_count: u32,
     redo_count: u32,
     // Compositing dirty tracking.
@@ -256,6 +258,7 @@ impl PigmentApp {
             liquify_src: Vec::new(),
             liquify_disp: Vec::new(),
             liquify_mode: 0,
+            detail_mode: 0,
             undo_count: 0,
             redo_count: 0,
             force_composite: true,
@@ -668,6 +671,62 @@ impl PigmentApp {
             }
             let amount: Vec<f32> = cover.iter().map(|&c| sign * c).collect();
             let solved = prism_core::tone::dodge_burn(&img, &amount, w, h);
+            let mut out = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = solved[p * 4 + 3];
+                out[p * 4] = solved[p * 4] * a;
+                out[p * 4 + 1] = solved[p * 4 + 1] * a;
+                out[p * 4 + 2] = solved[p * 4 + 2] * a;
+                out[p * 4 + 3] = a;
+            }
+            gpu.upload_layer(q, active, &f32_to_f16_bytes(&out));
+        });
+        self.force_composite = true;
+    }
+
+    /// Detail brush on release: saturate/desaturate (sponge), blur, or sharpen
+    /// the brushed coverage on the active layer.
+    fn do_detail(&mut self, frame: &mut eframe::Frame) {
+        if !self.tone_mask.iter().any(|&m| m > 0.0) {
+            return;
+        }
+        let (w, h) = (self.doc.size.width as usize, self.doc.size.height as usize);
+        if self.tone_mask.len() != w * h {
+            return;
+        }
+        let active = self.active_id();
+        let cover = std::mem::take(&mut self.tone_mask);
+        let mode = self.detail_mode;
+        let label = match mode {
+            0 => "Saturate",
+            1 => "Desaturate",
+            2 => "Blur",
+            _ => "Sharpen",
+        };
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, label);
+            let Some(bytes) = gpu.read_layer(d, q, active) else {
+                return;
+            };
+            let prem = f16_bytes_to_f32(&bytes);
+            let mut img = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = prem[p * 4 + 3];
+                let inv = if a > 1e-5 { 1.0 / a } else { 0.0 };
+                img[p * 4] = prem[p * 4] * inv;
+                img[p * 4 + 1] = prem[p * 4 + 1] * inv;
+                img[p * 4 + 2] = prem[p * 4 + 2] * inv;
+                img[p * 4 + 3] = a;
+            }
+            let solved = match mode {
+                0 => prism_core::tone::sponge(&img, &cover, w, h),
+                1 => {
+                    let neg: Vec<f32> = cover.iter().map(|&c| -c).collect();
+                    prism_core::tone::sponge(&img, &neg, w, h)
+                }
+                2 => prism_core::detail::blur_sharpen(&img, &cover, w, h, false),
+                _ => prism_core::detail::blur_sharpen(&img, &cover, w, h, true),
+            };
             let mut out = vec![0.0f32; w * h * 4];
             for p in 0..w * h {
                 let a = solved[p * 4 + 3];
@@ -2041,6 +2100,11 @@ impl eframe::App for PigmentApp {
                         icons::LIQUIFY,
                         "Liquify — push/twirl/pucker/bloat mesh warp",
                     ),
+                    (
+                        Tool::Detail,
+                        icons::DETAIL,
+                        "Detail brush — saturate / desaturate / blur / sharpen",
+                    ),
                     (Tool::Fill, icons::FILL, "Bucket fill"),
                     (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
                     (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
@@ -2085,6 +2149,21 @@ impl eframe::App for PigmentApp {
                         {
                             if ui.selectable_label(self.liquify_mode == m, name).clicked() {
                                 self.liquify_mode = m;
+                            }
+                        }
+                    });
+                }
+                if self.tool == Tool::Detail {
+                    ui.horizontal(|ui| {
+                        ui.label("Detail:");
+                        for (m, name) in [
+                            (0u8, "Saturate"),
+                            (1, "Desaturate"),
+                            (2, "Blur"),
+                            (3, "Sharpen"),
+                        ] {
+                            if ui.selectable_label(self.detail_mode == m, name).clicked() {
+                                self.detail_mode = m;
                             }
                         }
                     });
@@ -2910,6 +2989,44 @@ impl eframe::App for PigmentApp {
                             self.stroke_last = None;
                             self.liquify_src = Vec::new();
                             self.liquify_disp = Vec::new();
+                        }
+                    }
+                    Tool::Detail => {
+                        let r = self.brush_size * 0.5;
+                        let flow = (self.brush_opacity * 0.5).clamp(0.02, 1.0);
+                        if let Some(p) = response.interact_pointer_pos() {
+                            let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                            match self.stroke_last {
+                                None => {
+                                    let n = (self.doc.size.width * self.doc.size.height) as usize;
+                                    self.tone_mask = vec![0.0; n];
+                                    self.tone_mark(cur, r, flow);
+                                    self.stroke_last = Some(cur);
+                                }
+                                Some(last) => {
+                                    let seg = cur - last;
+                                    let dist = seg.length();
+                                    if dist > 1e-3 {
+                                        let dir = seg / dist;
+                                        let step = (r * 0.25).max(1.0);
+                                        let mut t = 0.0;
+                                        while t <= dist {
+                                            self.tone_mark(last + dir * t, r, flow);
+                                            t += step;
+                                        }
+                                        self.tone_mark(cur, r, flow);
+                                        self.stroke_last = Some(cur);
+                                    }
+                                }
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped()
+                            || (self.stroke_last.is_some()
+                                && response.interact_pointer_pos().is_none())
+                        {
+                            self.do_detail(frame);
+                            self.stroke_last = None;
                         }
                     }
                     Tool::Fill => {
