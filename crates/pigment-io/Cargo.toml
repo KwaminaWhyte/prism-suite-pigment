@@ -1,0 +1,17 @@
+[package]
+name = "pigment-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pigment-core.workspace = true
+thiserror.workspace = true
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "tiff",
+    "bmp",
+    "gif",
+] }

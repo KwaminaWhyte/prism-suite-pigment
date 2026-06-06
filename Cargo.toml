@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pigment-core",
+    "crates/pigment-io",
+    "crates/pigment-app",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pigment-editor/pigment"
+
+[workspace.dependencies]
+# Shared third-party deps pinned once (verify with `cargo add` at build).
+glam = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+
+# Internal crates
+pigment-core = { path = "crates/pigment-core" }
+pigment-io = { path = "crates/pigment-io" }
+
+[profile.dev]
+opt-level = 1          # keep the app usable while iterating
+
+[profile.dev.package."*"]
+opt-level = 3          # but build deps (wgpu/image) optimized

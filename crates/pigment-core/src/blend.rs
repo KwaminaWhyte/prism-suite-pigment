@@ -1,0 +1,65 @@
+//! Blend modes. Numeric discriminants are stable — they are written to the
+//! `.pigment` file and passed straight to the compositor shader as a uniform
+//! (PLAN.md §2, RESEARCH.md §2). Do not renumber existing variants.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u32)]
+pub enum BlendMode {
+    Normal = 0,
+    Multiply = 1,
+    Screen = 2,
+    Overlay = 3,
+    Darken = 4,
+    Lighten = 5,
+    ColorDodge = 6,
+    ColorBurn = 7,
+    HardLight = 8,
+    SoftLight = 9,
+    Difference = 10,
+    Exclusion = 11,
+    LinearDodge = 12, // "Add"
+    LinearBurn = 13,
+    // Non-separable HSL modes land in Phase 3.
+    Hue = 20,
+    Saturation = 21,
+    Color = 22,
+    Luminosity = 23,
+}
+
+impl Default for BlendMode {
+    fn default() -> Self {
+        BlendMode::Normal
+    }
+}
+
+impl BlendMode {
+    /// Raw value handed to the compositor shader's `blend_mode` uniform.
+    pub fn shader_id(self) -> u32 {
+        self as u32
+    }
+
+    /// True if expressible by fixed-function `wgpu::BlendState` (no backdrop
+    /// read needed) — the fast path. Everything else runs the switch shader.
+    pub fn is_fixed_function(self) -> bool {
+        matches!(self, BlendMode::Normal | BlendMode::Multiply | BlendMode::LinearDodge)
+    }
+
+    pub const ALL_SEPARABLE: [BlendMode; 14] = [
+        BlendMode::Normal,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::Darken,
+        BlendMode::Lighten,
+        BlendMode::ColorDodge,
+        BlendMode::ColorBurn,
+        BlendMode::HardLight,
+        BlendMode::SoftLight,
+        BlendMode::Difference,
+        BlendMode::Exclusion,
+        BlendMode::LinearDodge,
+        BlendMode::LinearBurn,
+    ];
+}

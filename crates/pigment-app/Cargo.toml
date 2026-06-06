@@ -1,0 +1,30 @@
+[package]
+name = "pigment-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "pigment"
+
+[[bin]]
+name = "pigment"
+path = "src/main.rs"
+
+[dependencies]
+pigment-core.workspace = true
+pigment-io.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+
+# eframe with the wgpu backend; it re-exports a matching `wgpu` + `egui_wgpu`,
+# so we never pin those versions separately (avoids the lockstep footgun).
+eframe = { version = "0.34", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+] }
+egui = "0.34"
+
+# Native file open/save dialogs.
+rfd = "0.15"
