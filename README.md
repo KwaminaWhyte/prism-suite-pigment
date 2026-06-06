@@ -24,7 +24,7 @@ roadmap and [ARCHITECTURE.md](./ARCHITECTURE.md) for current internals.
 | Phase 2 — selection, lasso/wand, transform, crop, resize, copy/paste, icon UI | ✅ done |
 | Phase 3 — adjustment layers, masks, filters, HSL blends, histogram | ✅ done |
 | Phase 4 — text layers, vector shapes, gradient (pen/smart-objects deferred) | ✅ mostly |
-| Phase 5 — color mgmt, PSD, AI, plugins | ⏳ planned |
+| Phase 5 — PSD import, EXR open, image export (color-mgmt/AI/plugins deferred) | 🚧 interop done |
 | Phase 5 — color mgmt, PSD, AI, plugins | ⏳ planned |
 
 ## Design principles

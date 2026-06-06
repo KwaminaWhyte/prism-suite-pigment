@@ -179,15 +179,15 @@ pigment/
 - [x] **DoD (partial):** text + vector editable after creation ✓; smart objects deferred
 - [ ] **Deferred:** pen tool (`kurbo` bezier + handles), polygon/line shapes, boolean shape ops (`i_overlay`), vector masks, smart objects, gradient editor (multi-stop) + pattern fill. Foundations present: `lyon`/`kurbo`/`i_overlay` in the stack; `curve` LUT for gradient stops.
 
-### Phase 5 — Pro features
-- [ ] Color management: ICC load/embed (`lcms2`), working-space conversion, soft-proofing, CMYK, 16/32-bit per channel, HDR/EXR
-- [ ] PSD import (layers/masks/blend via `psd` + our compositor); PSD export (custom serializer) or `.ora`
-- [ ] AI tools (`ort`): background removal (BiRefNet MIT / U²-Net fast preview), inpaint/heal (LaMa), super-res (Real-ESRGAN), select-subject
-- [ ] Heal/clone stamp, content-aware fill
-- [ ] Plugin API (WASM-sandboxed effects + OFX bridge consideration)
-- [ ] Performance: out-of-core huge docs, GPU profiling, multi-thread tile ops (`rayon`)
-- [ ] Web build: WASM + WebGPU target (`qcms` color path)
-- [ ] **DoD:** color-accurate, PSD-compatible, AI-assisted, extensible
+### Phase 5 — Pro features  *(IN PROGRESS — interop landed)*
+- [x] PSD import (`psd` 0.3.5): layers, opacity, blend, visibility → our model + compositor
+- [x] HDR/EXR open (`exr` 1.74, linear RGBA f32) + HDR via `image`
+- [x] Image export (`image`): PNG/JPEG/WebP/TIFF/BMP by extension (composite → straight sRGB8)
+- [ ] Color management: ICC load/embed (`lcms2`/`qcms`), working-space conversion, soft-proofing, CMYK — **deferred** (our working space is sRGB/linear today)
+- [ ] AI tools (`ort`): bg removal / inpaint / super-res — **deferred** (needs bundled ONNX models + runtime; impractical to ship/test in this environment)
+- [ ] PSD export, heal/clone stamp, content-aware fill — **deferred**
+- [ ] Plugin API; out-of-core huge docs + GPU sparse-virtual-texture streaming (also from Phase 1); web build (WASM+WebGPU, `qcms`) — **deferred** (large standalone subsystems)
+- [~] **DoD (partial):** PSD-compatible ✓, standard-format export ✓, HDR in ✓; color-managed / AI / extensible deferred
 
 ### Cross-cutting (every phase)
 - [ ] Tests: core model unit tests, blend-math golden-image tests, doc round-trip
