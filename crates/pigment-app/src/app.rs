@@ -35,6 +35,7 @@ enum Tool {
     SpotHeal,    // spot heal: brush a blemish, auto-source + heal on release (no manual source)
     ContentFill, // content-aware fill: brush a region, PatchMatch-synthesize from surroundings
     Dodge,       // dodge (lighten) / burn (darken with Alt) — brushed soft tonal adjust
+    Liquify,     // mesh warp: push/twirl/pucker/bloat via a displacement field
     Fill,
     Eyedropper,
     SelectRect,
@@ -145,6 +146,11 @@ pub struct PigmentApp {
     /// Dodge/Burn soft coverage (0..1, canvas-sized); accumulated over a stroke,
     /// applied on release.
     tone_mask: Vec<f32>,
+    /// Liquify: frozen straight-linear source captured at stroke start, the
+    /// accumulating displacement field, and the active warp mode.
+    liquify_src: Vec<f32>,
+    liquify_disp: Vec<[f32; 2]>,
+    liquify_mode: u8, // 0 push, 1 twirl, 2 pucker, 3 bloat
     undo_count: u32,
     redo_count: u32,
     // Compositing dirty tracking.
@@ -247,6 +253,9 @@ impl PigmentApp {
             clone_offset: [0.0; 2],
             heal_mask: Vec::new(),
             tone_mask: Vec::new(),
+            liquify_src: Vec::new(),
+            liquify_disp: Vec::new(),
+            liquify_mode: 0,
             undo_count: 0,
             redo_count: 0,
             force_composite: true,
@@ -668,6 +677,56 @@ impl PigmentApp {
                 out[p * 4 + 3] = a;
             }
             gpu.upload_layer(q, active, &f32_to_f16_bytes(&out));
+        });
+        self.force_composite = true;
+    }
+
+    /// Liquify stroke start: snapshot the active layer (straight linear) as the
+    /// warp source, zero the displacement field, and open an undo step.
+    fn liquify_capture(&mut self, frame: &mut eframe::Frame) {
+        let (w, h) = (self.doc.size.width as usize, self.doc.size.height as usize);
+        let active = self.active_id();
+        self.liquify_disp = vec![[0.0, 0.0]; w * h];
+        let mut src = Vec::new();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, "Liquify");
+            if let Some(bytes) = gpu.read_layer(d, q, active) {
+                let prem = f16_bytes_to_f32(&bytes);
+                let mut s = vec![0.0f32; w * h * 4];
+                for p in 0..w * h {
+                    let a = prem[p * 4 + 3];
+                    let inv = if a > 1e-5 { 1.0 / a } else { 0.0 };
+                    s[p * 4] = prem[p * 4] * inv;
+                    s[p * 4 + 1] = prem[p * 4 + 1] * inv;
+                    s[p * 4 + 2] = prem[p * 4 + 2] * inv;
+                    s[p * 4 + 3] = a;
+                }
+                src = s;
+            }
+        });
+        self.liquify_src = src;
+    }
+
+    /// Resample the frozen Liquify source through the current displacement field
+    /// and upload (live preview; re-warps the original each frame, no compounding).
+    fn liquify_apply(&mut self, frame: &mut eframe::Frame) {
+        let (w, h) = (self.doc.size.width as usize, self.doc.size.height as usize);
+        if self.liquify_src.len() != w * h * 4 || self.liquify_disp.len() != w * h {
+            return;
+        }
+        let active = self.active_id();
+        let warped =
+            prism_core::warp::apply_displacement(&self.liquify_src, &self.liquify_disp, w, h);
+        let mut out = vec![0.0f32; w * h * 4];
+        for p in 0..w * h {
+            let a = warped[p * 4 + 3];
+            out[p * 4] = warped[p * 4] * a;
+            out[p * 4 + 1] = warped[p * 4 + 1] * a;
+            out[p * 4 + 2] = warped[p * 4 + 2] * a;
+            out[p * 4 + 3] = a;
+        }
+        with_gpu(frame, |gpu, _, q| {
+            gpu.upload_layer(q, active, &f32_to_f16_bytes(&out))
         });
         self.force_composite = true;
     }
@@ -1977,6 +2036,11 @@ impl eframe::App for PigmentApp {
                         icons::DODGE,
                         "Dodge / burn — lighten, or darken with Alt (applies on release)",
                     ),
+                    (
+                        Tool::Liquify,
+                        icons::LIQUIFY,
+                        "Liquify — push/twirl/pucker/bloat mesh warp",
+                    ),
                     (Tool::Fill, icons::FILL, "Bucket fill"),
                     (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
                     (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
@@ -2014,6 +2078,17 @@ impl eframe::App for PigmentApp {
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=400.0).text("size"));
                 ui.add(egui::Slider::new(&mut self.brush_hardness, 0.0..=0.99).text("hardness"));
                 ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0).text("opacity"));
+                if self.tool == Tool::Liquify {
+                    ui.horizontal(|ui| {
+                        ui.label("Liquify:");
+                        for (m, name) in [(0u8, "Push"), (1, "Twirl"), (2, "Pucker"), (3, "Bloat")]
+                        {
+                            if ui.selectable_label(self.liquify_mode == m, name).clicked() {
+                                self.liquify_mode = m;
+                            }
+                        }
+                    });
+                }
                 ui.checkbox(&mut self.speed_dynamics, "speed → size")
                     .on_hover_text(
                         "Faster strokes paint thinner (stylus pressure isn't exposed by eframe)",
@@ -2760,6 +2835,81 @@ impl eframe::App for PigmentApp {
                         {
                             self.do_dodge_burn(frame, burn);
                             self.stroke_last = None;
+                        }
+                    }
+                    Tool::Liquify => {
+                        let (w, h) = (self.doc.size.width as usize, self.doc.size.height as usize);
+                        let r = self.brush_size * 0.5;
+                        let strength = self.brush_opacity.max(0.05);
+                        if let Some(p) = response.interact_pointer_pos() {
+                            let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                            if self.stroke_last.is_none() {
+                                self.liquify_capture(frame);
+                            }
+                            if self.liquify_src.len() == w * h * 4 {
+                                use prism_core::warp;
+                                match self.liquify_mode {
+                                    0 => {
+                                        if let Some(last) = self.stroke_last {
+                                            let mv = cur - last;
+                                            if mv.length() > 1e-3 {
+                                                warp::stamp_push(
+                                                    &mut self.liquify_disp,
+                                                    w,
+                                                    h,
+                                                    cur.x,
+                                                    cur.y,
+                                                    r,
+                                                    mv.x,
+                                                    mv.y,
+                                                    strength,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    1 => warp::stamp_twirl(
+                                        &mut self.liquify_disp,
+                                        w,
+                                        h,
+                                        cur.x,
+                                        cur.y,
+                                        r,
+                                        0.08 * strength,
+                                        1.0,
+                                    ),
+                                    2 => warp::stamp_pinch(
+                                        &mut self.liquify_disp,
+                                        w,
+                                        h,
+                                        cur.x,
+                                        cur.y,
+                                        r,
+                                        1.0,
+                                        0.04 * strength,
+                                    ),
+                                    _ => warp::stamp_pinch(
+                                        &mut self.liquify_disp,
+                                        w,
+                                        h,
+                                        cur.x,
+                                        cur.y,
+                                        r,
+                                        -1.0,
+                                        0.04 * strength,
+                                    ),
+                                }
+                                self.liquify_apply(frame);
+                            }
+                            self.stroke_last = Some(cur);
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped()
+                            || (self.stroke_last.is_some()
+                                && response.interact_pointer_pos().is_none())
+                        {
+                            self.stroke_last = None;
+                            self.liquify_src = Vec::new();
+                            self.liquify_disp = Vec::new();
                         }
                     }
                     Tool::Fill => {

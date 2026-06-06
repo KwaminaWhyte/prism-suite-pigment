@@ -266,7 +266,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 - [x] **Dodge / Burn** (brushed soft tonal adjust — lighten, or darken with Alt; accumulates a soft coverage mask over the stroke, applied via `prism_core::tone::dodge_burn` on release; unit-tested). *Still: Sponge (saturation), shadows/mids/highlights range + protect-tones.*
 - [ ] **Blur / Sharpen / Smudge tools** (S): localized GPU brush variants (smudge RMW already prototyped in brush research)
 - [ ] **Red-eye** (S): detect + desaturate/darken pupil
-- [ ] **Liquify** (L): forward-mapping mesh warp — push/pull, twirl, pucker, bloat, freeze/thaw mask, reconstruct; GPU displacement texture; face-aware later (AI, Phase 10)
+- [x] **Liquify** (mesh warp via a per-pixel displacement field — **Push / Twirl / Pucker / Bloat**, live preview re-warping a frozen snapshot each frame so there's no compounding blur; `prism_core::warp` resample + stamps, unit-tested). *Still: freeze/thaw mask, reconstruct, GPU displacement texture for big-image perf, face-aware (Phase 10).*
 - [ ] Tests: gradient-domain heal seam continuity; PatchMatch determinism (seeded); liquify mesh round-trip
 
 ### Phase 7 — Layer power: styles, smart objects, channels  *(non-destructive depth)*

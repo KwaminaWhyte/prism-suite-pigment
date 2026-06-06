@@ -7,6 +7,10 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Liquify** (Phase 6). Mesh warp via a per-pixel displacement field with
+  **Push / Twirl / Pucker / Bloat** modes (panel selector). Live preview
+  re-warps a frozen snapshot each frame (no compounding blur);
+  `prism_core::warp` provides the bilinear resample + brush stamps (unit-tested).
 - **Dodge & Burn** (Phase 6 retouch). Brush to lighten (dodge), or hold Alt to
   darken (burn); a soft coverage mask accumulates over the stroke and is applied
   in linear light on release (`prism_core::tone::dodge_burn`, unit-tested).

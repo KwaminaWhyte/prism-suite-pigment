@@ -59,6 +59,8 @@ pub const SPOT_HEAL: &str = ph::SPARKLE;
 pub const CONTENT_FILL: &str = ph::MAGIC_WAND;
 /// Dodge / burn tool (lighten / darken).
 pub const DODGE: &str = ph::SUN;
+/// Liquify (mesh warp) tool.
+pub const LIQUIFY: &str = ph::WAVES;
 /// Fill / paint-bucket tool.
 pub const FILL: &str = ph::PAINT_BUCKET;
 /// Eyedropper / color-pick tool.
