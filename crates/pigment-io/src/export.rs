@@ -24,9 +24,7 @@ pub enum ExportError {
 /// chosen from the file extension (png, jpg/jpeg, webp, tif/tiff, bmp).
 pub fn save_rgba8(path: &Path, rgba8: &[u8], w: u32, h: u32) -> Result<(), ExportError> {
     if w == 0 || h == 0 {
-        return Err(ExportError::Unsupported(format!(
-            "zero dimension: {w}x{h}"
-        )));
+        return Err(ExportError::Unsupported(format!("zero dimension: {w}x{h}")));
     }
 
     let expected = (w as usize)

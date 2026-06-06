@@ -61,17 +61,16 @@ mod tests {
         let path = std::env::temp_dir().join("pigment_roundtrip_test.exr");
         let _ = std::fs::remove_file(&path);
 
-        exr::prelude::write_rgba_file(&path, 2, 2, |x, y| {
-            (x as f32, y as f32, 0.5, 1.0)
-        })
-        .expect("write tiny exr");
+        exr::prelude::write_rgba_file(&path, 2, 2, |x, y| (x as f32, y as f32, 0.5, 1.0))
+            .expect("write tiny exr");
 
         let (size, pixels) = load_exr(&path).expect("read tiny exr");
         assert_eq!(size, Size::new(2, 2));
         assert_eq!(pixels.len(), 2 * 2 * 4);
 
-        // Pixel (1, 0): x=1, y=0 -> (1.0, 0.0, 0.5, 1.0).
-        let idx = (0 * 2 + 1) * 4;
+        // Pixel (x=1, y=0) in a 2x2 image -> (1.0, 0.0, 0.5, 1.0).
+        let (x, y, w) = (1usize, 0usize, 2usize);
+        let idx = (y * w + x) * 4;
         assert_eq!(pixels[idx], 1.0);
         assert_eq!(pixels[idx + 1], 0.0);
         assert_eq!(pixels[idx + 2], 0.5);

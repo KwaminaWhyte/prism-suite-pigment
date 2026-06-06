@@ -137,7 +137,11 @@ pub fn load_psd(path: &Path) -> Result<PsdDoc, PsdError> {
         });
     }
 
-    Ok(PsdDoc { width, height, layers })
+    Ok(PsdDoc {
+        width,
+        height,
+        layers,
+    })
 }
 
 #[cfg(test)]
@@ -160,7 +164,7 @@ mod tests {
         assert_eq!(map_blend_discriminant(13), 3); // Overlay
         assert_eq!(map_blend_discriminant(11), 12); // LinearDodge (Add)
         assert_eq!(map_blend_discriminant(27), 23); // Luminosity
-        // unmapped / pass-through -> Normal
+                                                    // unmapped / pass-through -> Normal
         assert_eq!(map_blend_discriminant(0), 0); // PassThrough
         assert_eq!(map_blend_discriminant(2), 0); // Dissolve
         assert_eq!(map_blend_discriminant(999), 0);

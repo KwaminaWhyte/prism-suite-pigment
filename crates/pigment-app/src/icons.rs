@@ -24,10 +24,7 @@ pub fn install(ctx: &egui::Context) {
 
     // Append as a fallback (lowest priority) for both built-in families so the
     // default text fonts win for normal characters and Phosphor supplies icons.
-    for family in [
-        egui::FontFamily::Proportional,
-        egui::FontFamily::Monospace,
-    ] {
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
             .families
             .entry(family)
@@ -87,6 +84,8 @@ pub const EYE: &str = ph::EYE;
 // --- History ----------------------------------------------------------------
 
 /// Undo.
+#[allow(dead_code)]
 pub const UNDO: &str = ph::ARROW_COUNTER_CLOCKWISE;
 /// Redo.
+#[allow(dead_code)]
 pub const REDO: &str = ph::ARROW_CLOCKWISE;

@@ -6,9 +6,8 @@
 //! slightly larger heading text. Call once at startup with `cc.egui_ctx`.
 
 use egui::{
-    Color32, CornerRadius, FontFamily, FontId, Margin, Stroke, Vec2,
     style::{Selection, WidgetVisuals, Widgets},
-    Context, Style, Visuals,
+    Color32, Context, CornerRadius, FontFamily, FontId, Margin, Stroke, Style, Vec2, Visuals,
 };
 
 // --- Palette ----------------------------------------------------------------

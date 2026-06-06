@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u32)]
+#[derive(Default)]
 pub enum BlendMode {
+    #[default]
     Normal = 0,
     Multiply = 1,
     Screen = 2,
@@ -26,12 +28,6 @@ pub enum BlendMode {
     Saturation = 21,
     Color = 22,
     Luminosity = 23,
-}
-
-impl Default for BlendMode {
-    fn default() -> Self {
-        BlendMode::Normal
-    }
 }
 
 impl BlendMode {
@@ -67,7 +63,10 @@ impl BlendMode {
     /// True if expressible by fixed-function `wgpu::BlendState` (no backdrop
     /// read needed) — the fast path. Everything else runs the switch shader.
     pub fn is_fixed_function(self) -> bool {
-        matches!(self, BlendMode::Normal | BlendMode::Multiply | BlendMode::LinearDodge)
+        matches!(
+            self,
+            BlendMode::Normal | BlendMode::Multiply | BlendMode::LinearDodge
+        )
     }
 
     /// Every blend mode, in menu order (separable then HSL).

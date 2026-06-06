@@ -5,8 +5,8 @@
 //! in later phases (PLAN.md §4).
 
 pub mod document_file;
-pub mod exr_io;
 pub mod export;
+pub mod exr_io;
 pub mod psd_import;
 pub mod resize;
 pub mod text;
@@ -38,7 +38,10 @@ pub fn load_image(path: impl AsRef<Path>) -> Result<LoadedImage, IoError> {
     let img = image::open(path.as_ref())?;
     let rgba = img.to_rgba8();
     let size = Size::new(rgba.width(), rgba.height());
-    Ok(LoadedImage { size, rgba8: rgba.into_raw() })
+    Ok(LoadedImage {
+        size,
+        rgba8: rgba.into_raw(),
+    })
 }
 
 /// Build a placeholder gradient so the canvas shows something on first launch.

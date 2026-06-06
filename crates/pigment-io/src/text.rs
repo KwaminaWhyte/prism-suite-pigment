@@ -4,9 +4,7 @@
 //! straight sRGB color into linear light and premultiplies by glyph coverage so
 //! the result can be uploaded directly as a layer.
 
-use cosmic_text::{
-    Align, Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache,
-};
+use cosmic_text::{Align, Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache};
 
 /// Horizontal text alignment within the target buffer.
 #[derive(Clone, Copy)]

@@ -44,7 +44,12 @@ pub struct TextDef {
 
 impl Default for TextDef {
     fn default() -> Self {
-        Self { text: "Text".into(), font_px: 48.0, color: [1.0, 1.0, 1.0, 1.0], align: 0 }
+        Self {
+            text: "Text".into(),
+            font_px: 48.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            align: 0,
+        }
     }
 }
 
@@ -124,7 +129,9 @@ impl Layer {
         Self {
             id,
             name: name.into(),
-            kind: LayerKind::Group { children: Vec::new() },
+            kind: LayerKind::Group {
+                children: Vec::new(),
+            },
             blend: BlendMode::Normal,
             opacity: 1.0,
             visible: true,

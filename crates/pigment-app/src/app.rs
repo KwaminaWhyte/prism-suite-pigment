@@ -6,12 +6,12 @@ use std::collections::HashSet;
 use eframe::egui_wgpu;
 use eframe::wgpu;
 use half::f16;
+use pigment_core::adjust::Adjustment;
 use pigment_core::color::{linear_to_srgb, srgb_to_linear};
 use pigment_core::fill::flood_fill_mask;
 use pigment_core::histogram::{self, Histogram};
-use pigment_core::raster::{self, CombineMode};
-use pigment_core::adjust::Adjustment;
 use pigment_core::layer::{TextDef, VectorDef};
+use pigment_core::raster::{self, CombineMode};
 use pigment_core::shape::{self, ShapeKind};
 use pigment_core::{BlendMode, Document, Layer, LayerId, LayerKind, Size};
 use pigment_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
@@ -24,8 +24,8 @@ use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTra
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
-    Move,        // pan the view (hand)
-    MoveLayer,   // translate the active layer
+    Move,      // pan the view (hand)
+    MoveLayer, // translate the active layer
     Brush,
     Eraser,
     Fill,
@@ -138,8 +138,8 @@ pub struct PigmentApp {
     sel_drag_start: Option<egui::Vec2>,
     sel_op_pending: Option<SelectionOp>,
     selection_active: bool,
-    sel_base: Vec<f32>,        // selection snapshot at op start (for combine)
-    sel_mode: CombineMode,     // current modifier-derived combine mode
+    sel_base: Vec<f32>,            // selection snapshot at op start (for combine)
+    sel_mode: CombineMode,         // current modifier-derived combine mode
     lasso_points: Vec<egui::Vec2>, // in-progress lasso (document px)
     feather_radius: f32,
 
@@ -298,7 +298,11 @@ impl PigmentApp {
                     text::render_text(&t.text, t.font_px, t.color, w, h, align)
                 }
                 LayerKind::Vector(v) => {
-                    let kind = if v.kind == 1 { ShapeKind::Ellipse } else { ShapeKind::Rectangle };
+                    let kind = if v.kind == 1 {
+                        ShapeKind::Ellipse
+                    } else {
+                        ShapeKind::Rectangle
+                    };
                     let c = v.color;
                     let lin = [
                         srgb_to_linear(c[0]),
@@ -352,7 +356,9 @@ impl PigmentApp {
         let grad = shape::linear_gradient((p0.x, p0.y), (p1.x, p1.y), c0, [0.0; 4], w, h);
         with_gpu(frame, |gpu, d, q| {
             gpu.begin_command_now(d, q, active, "Gradient");
-            let Some(b) = gpu.read_layer(d, q, active) else { return };
+            let Some(b) = gpu.read_layer(d, q, active) else {
+                return;
+            };
             let mut base = f16_bytes_to_f32(&b);
             for i in 0..(w * h) as usize {
                 let ga = grad[i * 4 + 3];
@@ -367,7 +373,9 @@ impl PigmentApp {
 
     fn do_filter(&mut self, frame: &mut eframe::Frame, kind: u32, radius: f32, amount: f32) {
         let active = self.active_id();
-        with_gpu(frame, |gpu, d, q| gpu.apply_filter(d, q, active, kind, radius, amount));
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_filter(d, q, active, kind, radius, amount)
+        });
         self.force_composite = true;
     }
 
@@ -378,7 +386,9 @@ impl PigmentApp {
         } else {
             None
         };
-        with_gpu(frame, |gpu, d, q| gpu.set_mask(d, q, active, values.as_deref()));
+        with_gpu(frame, |gpu, d, q| {
+            gpu.set_mask(d, q, active, values.as_deref())
+        });
         self.masked_layers.insert(active);
         self.force_composite = true;
     }
@@ -393,16 +403,26 @@ impl PigmentApp {
 
     /// Read every layer to CPU f32, map each through `map`, recreate the canvas
     /// at `new_size`, and re-upload. Used by resize/canvas/crop.
-    fn rebuild_document(&mut self, frame: &mut eframe::Frame, new_size: Size, map: impl Fn(&[f32]) -> Vec<f32>) {
+    fn rebuild_document(
+        &mut self,
+        frame: &mut eframe::Frame,
+        new_size: Size,
+        map: impl Fn(&[f32]) -> Vec<f32>,
+    ) {
         let ids: Vec<LayerId> = self.doc.layers.layers.iter().map(|l| l.id).collect();
         let layers_px = with_gpu(frame, |gpu, d, q| {
             ids.iter()
-                .filter_map(|id| gpu.read_layer(d, q, *id).map(|b| (*id, f16_bytes_to_f32(&b))))
+                .filter_map(|id| {
+                    gpu.read_layer(d, q, *id)
+                        .map(|b| (*id, f16_bytes_to_f32(&b)))
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-        let mapped: Vec<(LayerId, Vec<u8>)> =
-            layers_px.iter().map(|(id, px)| (*id, f32_to_f16_bytes(&map(px)))).collect();
+        let mapped: Vec<(LayerId, Vec<u8>)> = layers_px
+            .iter()
+            .map(|(id, px)| (*id, f32_to_f16_bytes(&map(px))))
+            .collect();
         self.doc.size = new_size;
         with_gpu(frame, |gpu, d, q| {
             gpu.ensure_canvas(d, new_size);
@@ -418,7 +438,11 @@ impl PigmentApp {
 
     fn resize_image(&mut self, frame: &mut eframe::Frame, nw: u32, nh: u32) {
         let old = self.doc.size;
-        let q = if nw < old.width { Quality::Lanczos3 } else { Quality::Bicubic };
+        let q = if nw < old.width {
+            Quality::Lanczos3
+        } else {
+            Quality::Bicubic
+        };
         self.rebuild_document(frame, Size::new(nw, nh), move |px| {
             resize_rgba_f32(px, old.width, old.height, nw, nh, q)
         });
@@ -477,7 +501,11 @@ impl PigmentApp {
         let has_sel = self.selection_active;
         let res = with_gpu(frame, |gpu, d, q| {
             let px = gpu.read_layer(d, q, active)?;
-            let sel = if has_sel { gpu.read_selection(d, q) } else { None };
+            let sel = if has_sel {
+                gpu.read_selection(d, q)
+            } else {
+                None
+            };
             Some((f16_bytes_to_f32(&px), sel))
         })
         .flatten();
@@ -503,7 +531,8 @@ impl PigmentApp {
         let n = (self.doc.size.width * self.doc.size.height) as usize;
         with_gpu(frame, |gpu, d, q| {
             gpu.begin_command_now(d, q, active, "Cut");
-            let (Some(b), Some(sel)) = (gpu.read_layer(d, q, active), gpu.read_selection(d, q)) else {
+            let (Some(b), Some(sel)) = (gpu.read_layer(d, q, active), gpu.read_selection(d, q))
+            else {
                 return;
             };
             let mut px = f16_bytes_to_f32(&b);
@@ -520,7 +549,9 @@ impl PigmentApp {
     }
 
     fn paste(&mut self, frame: &mut eframe::Frame) {
-        let Some(mut cb) = self.clipboard.clone() else { return };
+        let Some(mut cb) = self.clipboard.clone() else {
+            return;
+        };
         if self.clipboard_size != self.doc.size {
             cb = reposition(
                 &cb,
@@ -552,9 +583,11 @@ impl PigmentApp {
         if !self.selection_active {
             return vec![0.0; n];
         }
-        with_gpu(frame, |gpu, device, queue| gpu.read_selection(device, queue))
-            .flatten()
-            .unwrap_or_else(|| vec![0.0; n])
+        with_gpu(frame, |gpu, device, queue| {
+            gpu.read_selection(device, queue)
+        })
+        .flatten()
+        .unwrap_or_else(|| vec![0.0; n])
     }
 
     /// Upload a CPU selection mask and mark a selection active.
@@ -564,7 +597,11 @@ impl PigmentApp {
     }
 
     /// Read → transform → upload the selection (feather / grow / shrink).
-    fn map_selection(&mut self, frame: &mut eframe::Frame, f: impl Fn(&[f32], u32, u32) -> Vec<f32>) {
+    fn map_selection(
+        &mut self,
+        frame: &mut eframe::Frame,
+        f: impl Fn(&[f32], u32, u32) -> Vec<f32>,
+    ) {
         if !self.selection_active {
             return;
         }
@@ -676,7 +713,9 @@ impl PigmentApp {
     }
 
     fn open_pigment(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Pigment", &["pigment"]).pick_file()
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Pigment", &["pigment"])
+            .pick_file()
         else {
             return;
         };
@@ -701,15 +740,26 @@ impl PigmentApp {
             let bytes = pixels.get(i).map(|p| p.rgba16f.clone()).unwrap_or_default();
             staged.push((id, bytes));
         }
-        self.background_id = doc.layers.layers.first().map(|l| l.id).unwrap_or(LayerId(0));
+        self.background_id = doc
+            .layers
+            .layers
+            .first()
+            .map(|l| l.id)
+            .unwrap_or(LayerId(0));
         doc.active_layer = doc.layers.layers.last().map(|l| l.id);
         self.doc = doc;
-        self.pending = Some(PendingUpload { size, layers: staged });
+        self.pending = Some(PendingUpload {
+            size,
+            layers: staged,
+        });
         self.needs_fit = true;
     }
 
     fn open_psd(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Photoshop", &["psd"]).pick_file() else {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Photoshop", &["psd"])
+            .pick_file()
+        else {
             return;
         };
         let doc_psd = match pigment_io::psd_import::load_psd(&path) {
@@ -736,16 +786,27 @@ impl PigmentApp {
             let id = doc.layers.add_raster("Background");
             staged.push((id, vec![0u8; (size.width * size.height * 8) as usize]));
         }
-        self.background_id = doc.layers.layers.first().map(|l| l.id).unwrap_or(LayerId(0));
+        self.background_id = doc
+            .layers
+            .layers
+            .first()
+            .map(|l| l.id)
+            .unwrap_or(LayerId(0));
         doc.active_layer = doc.layers.layers.last().map(|l| l.id);
         self.doc = doc;
-        self.pending = Some(PendingUpload { size, layers: staged });
+        self.pending = Some(PendingUpload {
+            size,
+            layers: staged,
+        });
         self.masked_layers.clear();
         self.needs_fit = true;
     }
 
     fn open_exr(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("OpenEXR", &["exr"]).pick_file() else {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("OpenEXR", &["exr"])
+            .pick_file()
+        else {
             return;
         };
         let (size, rgba) = match pigment_io::exr_io::load_exr(&path) {
@@ -766,14 +827,20 @@ impl PigmentApp {
         }
         self.doc = Document::new(size);
         self.background_id = self.doc.layers.layers[0].id;
-        self.pending = Some(PendingUpload { size, layers: vec![(self.background_id, bytes)] });
+        self.pending = Some(PendingUpload {
+            size,
+            layers: vec![(self.background_id, bytes)],
+        });
         self.masked_layers.clear();
         self.needs_fit = true;
     }
 
     fn export_image(&mut self, frame: &mut eframe::Frame) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Image", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp"])
+            .add_filter(
+                "Image",
+                &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp"],
+            )
             .set_file_name("export.png")
             .save_file()
         else {
@@ -794,7 +861,8 @@ impl PigmentApp {
         for px in f.chunks_exact(4) {
             let a = px[3];
             let inv = if a > 1e-5 { 1.0 / a } else { 0.0 };
-            let to8 = |lin: f32| (linear_to_srgb((lin * inv).clamp(0.0, 1.0)) * 255.0).round() as u8;
+            let to8 =
+                |lin: f32| (linear_to_srgb((lin * inv).clamp(0.0, 1.0)) * 255.0).round() as u8;
             rgba8.push(to8(px[0]));
             rgba8.push(to8(px[1]));
             rgba8.push(to8(px[2]));
@@ -834,8 +902,10 @@ impl PigmentApp {
         let pixels = with_gpu(frame, |gpu, device, queue| {
             ids.iter()
                 .filter_map(|id| {
-                    gpu.read_layer(device, queue, *id)
-                        .map(|b| LayerPixels { id: id.0, rgba16f: b })
+                    gpu.read_layer(device, queue, *id).map(|b| LayerPixels {
+                        id: id.0,
+                        rgba16f: b,
+                    })
                 })
                 .collect::<Vec<_>>()
         });
@@ -851,7 +921,10 @@ impl PigmentApp {
             return;
         }
         let scale = (viewport.width() / img.x).min(viewport.height() / img.y) * 0.95;
-        self.view = ViewTransform { pan: egui::Vec2::ZERO, zoom: scale.clamp(0.02, 64.0) };
+        self.view = ViewTransform {
+            pan: egui::Vec2::ZERO,
+            zoom: scale.clamp(0.02, 64.0),
+        };
     }
 
     fn dab_at(&self, doc_pos: egui::Vec2, alpha: f32, size_scale: f32) -> Dab {
@@ -899,12 +972,18 @@ impl PigmentApp {
             let sbuf = f16_bytes_to_f32(&sample);
             let mask = flood_fill_mask(&sbuf, w, h, seed.0, seed.1, tol, contiguous);
             // Constrain the fill to the active selection, if any.
-            let sel = if has_sel { gpu.read_selection(device, queue) } else { None };
+            let sel = if has_sel {
+                gpu.read_selection(device, queue)
+            } else {
+                None
+            };
             // Write target is always the active layer.
-            let Some(active_bytes) = gpu.read_layer(device, queue, active) else { return };
+            let Some(active_bytes) = gpu.read_layer(device, queue, active) else {
+                return;
+            };
             let mut abuf = f16_bytes_to_f32(&active_bytes);
             for (i, &m) in mask.iter().enumerate() {
-                let selected = sel.as_ref().map_or(true, |s| s[i] > 0.5);
+                let selected = sel.as_ref().is_none_or(|s| s[i] > 0.5);
                 if m && selected {
                     let o = i * 4;
                     abuf[o..o + 4].copy_from_slice(&fill);
@@ -949,7 +1028,8 @@ impl PigmentApp {
         if let Some(p) = px {
             let a = p[3];
             if a > 0.01 {
-                let to8 = |lin: f32| (linear_to_srgb(lin / a).clamp(0.0, 1.0) * 255.0).round() as u8;
+                let to8 =
+                    |lin: f32| (linear_to_srgb(lin / a).clamp(0.0, 1.0) * 255.0).round() as u8;
                 self.brush_color = egui::Color32::from_rgb(to8(p[0]), to8(p[1]), to8(p[2]));
             }
         }
@@ -1030,7 +1110,11 @@ fn flip(src: &[f32], w: u32, h: u32, horizontal: bool) -> Vec<f32> {
     let mut dst = vec![0.0; src.len()];
     for y in 0..h {
         for x in 0..w {
-            let (sx, sy) = if horizontal { (w - 1 - x, y) } else { (x, h - 1 - y) };
+            let (sx, sy) = if horizontal {
+                (w - 1 - x, y)
+            } else {
+                (x, h - 1 - y)
+            };
             let si = ((sy * w + sx) * 4) as usize;
             let di = ((y * w + x) * 4) as usize;
             dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
@@ -1049,21 +1133,37 @@ fn srgba_to_color(c: [f32; 4]) -> egui::Color32 {
 }
 
 fn color_to_srgba(c: egui::Color32) -> [f32; 4] {
-    [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0, c.a() as f32 / 255.0]
+    [
+        c.r() as f32 / 255.0,
+        c.g() as f32 / 255.0,
+        c.b() as f32 / 255.0,
+        c.a() as f32 / 255.0,
+    ]
 }
 
 fn adjustment_ui(ui: &mut egui::Ui, adj: &mut Adjustment) {
     match adj {
-        Adjustment::BrightnessContrast { brightness, contrast } => {
+        Adjustment::BrightnessContrast {
+            brightness,
+            contrast,
+        } => {
             ui.add(egui::Slider::new(brightness, -0.5..=0.5).text("brightness"));
             ui.add(egui::Slider::new(contrast, -0.5..=1.0).text("contrast"));
         }
-        Adjustment::Levels { in_black, in_white, gamma } => {
+        Adjustment::Levels {
+            in_black,
+            in_white,
+            gamma,
+        } => {
             ui.add(egui::Slider::new(in_black, 0.0..=1.0).text("black"));
             ui.add(egui::Slider::new(in_white, 0.0..=1.0).text("white"));
             ui.add(egui::Slider::new(gamma, 0.1..=4.0).text("gamma"));
         }
-        Adjustment::HueSaturation { hue, saturation, lightness } => {
+        Adjustment::HueSaturation {
+            hue,
+            saturation,
+            lightness,
+        } => {
             ui.add(egui::Slider::new(hue, -180.0..=180.0).text("hue"));
             ui.add(egui::Slider::new(saturation, -1.0..=1.0).text("saturation"));
             ui.add(egui::Slider::new(lightness, -0.5..=0.5).text("lightness"));
@@ -1148,7 +1248,10 @@ impl eframe::App for PigmentApp {
                         self.copy_selection(frame);
                         ui.close_menu();
                     }
-                    if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("Paste")).clicked() {
+                    if ui
+                        .add_enabled(self.clipboard.is_some(), egui::Button::new("Paste"))
+                        .clicked()
+                    {
                         self.paste(frame);
                         ui.close_menu();
                     }
@@ -1186,19 +1289,26 @@ impl eframe::App for PigmentApp {
                     }
                 });
                 ui.menu_button("Filter", |ui| {
-                    ui.add(egui::Slider::new(&mut self.filter_radius, 0.0..=40.0).text("blur radius"));
+                    ui.add(
+                        egui::Slider::new(&mut self.filter_radius, 0.0..=40.0).text("blur radius"),
+                    );
                     if ui.button("Gaussian blur").clicked() {
                         self.do_filter(frame, 1, self.filter_radius, 0.0);
                         ui.close_menu();
                     }
                     ui.separator();
-                    ui.add(egui::Slider::new(&mut self.filter_amount, 0.0..=4.0).text("sharpen amount"));
+                    ui.add(
+                        egui::Slider::new(&mut self.filter_amount, 0.0..=4.0)
+                            .text("sharpen amount"),
+                    );
                     if ui.button("Sharpen").clicked() {
                         self.do_filter(frame, 2, 0.0, self.filter_amount);
                         ui.close_menu();
                     }
                     ui.separator();
-                    ui.add(egui::Slider::new(&mut self.filter_block, 1.0..=40.0).text("pixel size"));
+                    ui.add(
+                        egui::Slider::new(&mut self.filter_block, 1.0..=40.0).text("pixel size"),
+                    );
                     if ui.button("Pixelate").clicked() {
                         self.do_filter(frame, 3, self.filter_block, 0.0);
                         ui.close_menu();
@@ -1221,7 +1331,9 @@ impl eframe::App for PigmentApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    ui.add(egui::Slider::new(&mut self.feather_radius, 0.0..=30.0).text("feather px"));
+                    ui.add(
+                        egui::Slider::new(&mut self.feather_radius, 0.0..=30.0).text("feather px"),
+                    );
                     if ui.button("Feather").clicked() {
                         let r = self.feather_radius;
                         self.map_selection(frame, move |m, w, h| raster::feather(m, w, h, r));
@@ -1251,93 +1363,120 @@ impl eframe::App for PigmentApp {
             });
         });
 
-        egui::SidePanel::left("tools").exact_width(48.0).show_inside(root, |ui| {
-            ui.add_space(6.0);
-            use crate::icons;
-            for (tool, icon, name) in [
-                (Tool::Move, icons::PAN, "Pan view"),
-                (Tool::MoveLayer, icons::MOVE, "Move layer"),
-                (Tool::Brush, icons::BRUSH, "Brush"),
-                (Tool::Eraser, icons::ERASER, "Eraser"),
-                (Tool::Fill, icons::FILL, "Bucket fill"),
-                (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
-                (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
-                (Tool::SelectEllipse, icons::ELLIPSE_SELECT, "Ellipse select"),
-                (Tool::Lasso, icons::LASSO, "Lasso select"),
-                (Tool::MagicWand, icons::MAGIC_WAND, "Magic wand"),
-                (Tool::Transform, icons::TRANSFORM, "Transform"),
-                (Tool::Crop, icons::CROP, "Crop"),
-                (Tool::Text, icons::TEXT, "Text"),
-                (Tool::ShapeRect, icons::SHAPE, "Rectangle shape"),
-                (Tool::ShapeEllipse, icons::ELLIPSE_SELECT, "Ellipse shape"),
-                (Tool::Gradient, icons::GRADIENT, "Gradient"),
-            ] {
-                let btn = egui::SelectableLabel::new(
-                    self.tool == tool,
-                    egui::RichText::new(icon).size(20.0),
-                );
-                if ui.add_sized([36.0, 30.0], btn).on_hover_text(name).clicked() {
-                    self.tool = tool;
-                }
-            }
-            ui.add_space(6.0);
-            ui.separator();
-            ui.vertical_centered(|ui| ui.color_edit_button_srgba(&mut self.brush_color));
-        });
-
-        egui::SidePanel::right("panels").default_width(250.0).show_inside(root, |ui| {
-            ui.heading("Brush");
-            ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=400.0).text("size"));
-            ui.add(egui::Slider::new(&mut self.brush_hardness, 0.0..=0.99).text("hardness"));
-            ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0).text("opacity"));
-            ui.checkbox(&mut self.speed_dynamics, "speed → size")
-                .on_hover_text("Faster strokes paint thinner (stylus pressure isn't exposed by eframe)");
-            if self.speed_dynamics {
-                ui.add(egui::Slider::new(&mut self.min_size_scale, 0.05..=1.0).text("min size"));
-            }
-            if self.tool == Tool::Fill {
-                ui.add(egui::Slider::new(&mut self.fill_tolerance, 0.0..=1.0).text("tolerance"));
-                ui.checkbox(&mut self.fill_contiguous, "contiguous");
-            }
-            if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
-                ui.checkbox(&mut self.sample_all, "sample all layers");
-            }
-            if matches!(self.tool, Tool::MoveLayer | Tool::Transform) {
-                ui.label("Drag to move the active layer.");
-                if self.tool == Tool::Transform {
-                    ui.label("Shift+drag to scale.");
-                }
-            }
-            if matches!(self.tool, Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand) {
-                ui.label("Shift: add · Alt: subtract.");
-            }
-
-            ui.separator();
-            egui::CollapsingHeader::new("Histogram").show(ui, |ui| {
-                if ui.button("Refresh").clicked() {
-                    self.refresh_histogram(frame);
-                }
-                if let Some(h) = &self.hist {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(ui.available_width(), 64.0), egui::Sense::hover());
-                    let painter = ui.painter_at(rect);
-                    painter.rect_filled(rect, 2.0, egui::Color32::from_gray(18));
-                    let max = h.luma.iter().copied().max().unwrap_or(1).max(1) as f32;
-                    let n = h.luma.len().max(1);
-                    for (i, &c) in h.luma.iter().enumerate() {
-                        let x = rect.left() + rect.width() * i as f32 / n as f32;
-                        let bh = rect.height() * (c as f32 / max);
-                        painter.line_segment(
-                            [egui::pos2(x, rect.bottom()), egui::pos2(x, rect.bottom() - bh)],
-                            egui::Stroke::new(1.0, egui::Color32::from_gray(200)),
-                        );
+        egui::SidePanel::left("tools")
+            .exact_width(48.0)
+            .show_inside(root, |ui| {
+                ui.add_space(6.0);
+                use crate::icons;
+                for (tool, icon, name) in [
+                    (Tool::Move, icons::PAN, "Pan view"),
+                    (Tool::MoveLayer, icons::MOVE, "Move layer"),
+                    (Tool::Brush, icons::BRUSH, "Brush"),
+                    (Tool::Eraser, icons::ERASER, "Eraser"),
+                    (Tool::Fill, icons::FILL, "Bucket fill"),
+                    (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
+                    (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
+                    (Tool::SelectEllipse, icons::ELLIPSE_SELECT, "Ellipse select"),
+                    (Tool::Lasso, icons::LASSO, "Lasso select"),
+                    (Tool::MagicWand, icons::MAGIC_WAND, "Magic wand"),
+                    (Tool::Transform, icons::TRANSFORM, "Transform"),
+                    (Tool::Crop, icons::CROP, "Crop"),
+                    (Tool::Text, icons::TEXT, "Text"),
+                    (Tool::ShapeRect, icons::SHAPE, "Rectangle shape"),
+                    (Tool::ShapeEllipse, icons::ELLIPSE_SELECT, "Ellipse shape"),
+                    (Tool::Gradient, icons::GRADIENT, "Gradient"),
+                ] {
+                    let btn = egui::SelectableLabel::new(
+                        self.tool == tool,
+                        egui::RichText::new(icon).size(20.0),
+                    );
+                    if ui
+                        .add_sized([36.0, 30.0], btn)
+                        .on_hover_text(name)
+                        .clicked()
+                    {
+                        self.tool = tool;
                     }
                 }
+                ui.add_space(6.0);
+                ui.separator();
+                ui.vertical_centered(|ui| ui.color_edit_button_srgba(&mut self.brush_color));
             });
 
-            ui.separator();
-            let (undos, redos) = with_gpu(frame, |gpu, _, _| gpu.history_labels()).unwrap_or_default();
-            egui::CollapsingHeader::new(format!("History  ({} / {})", undos.len(), redos.len()))
+        egui::SidePanel::right("panels")
+            .default_width(250.0)
+            .show_inside(root, |ui| {
+                ui.heading("Brush");
+                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=400.0).text("size"));
+                ui.add(egui::Slider::new(&mut self.brush_hardness, 0.0..=0.99).text("hardness"));
+                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0).text("opacity"));
+                ui.checkbox(&mut self.speed_dynamics, "speed → size")
+                    .on_hover_text(
+                        "Faster strokes paint thinner (stylus pressure isn't exposed by eframe)",
+                    );
+                if self.speed_dynamics {
+                    ui.add(
+                        egui::Slider::new(&mut self.min_size_scale, 0.05..=1.0).text("min size"),
+                    );
+                }
+                if self.tool == Tool::Fill {
+                    ui.add(
+                        egui::Slider::new(&mut self.fill_tolerance, 0.0..=1.0).text("tolerance"),
+                    );
+                    ui.checkbox(&mut self.fill_contiguous, "contiguous");
+                }
+                if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
+                    ui.checkbox(&mut self.sample_all, "sample all layers");
+                }
+                if matches!(self.tool, Tool::MoveLayer | Tool::Transform) {
+                    ui.label("Drag to move the active layer.");
+                    if self.tool == Tool::Transform {
+                        ui.label("Shift+drag to scale.");
+                    }
+                }
+                if matches!(
+                    self.tool,
+                    Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand
+                ) {
+                    ui.label("Shift: add · Alt: subtract.");
+                }
+
+                ui.separator();
+                egui::CollapsingHeader::new("Histogram").show(ui, |ui| {
+                    if ui.button("Refresh").clicked() {
+                        self.refresh_histogram(frame);
+                    }
+                    if let Some(h) = &self.hist {
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 64.0),
+                            egui::Sense::hover(),
+                        );
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(rect, 2.0, egui::Color32::from_gray(18));
+                        let max = h.luma.iter().copied().max().unwrap_or(1).max(1) as f32;
+                        let n = h.luma.len().max(1);
+                        for (i, &c) in h.luma.iter().enumerate() {
+                            let x = rect.left() + rect.width() * i as f32 / n as f32;
+                            let bh = rect.height() * (c as f32 / max);
+                            painter.line_segment(
+                                [
+                                    egui::pos2(x, rect.bottom()),
+                                    egui::pos2(x, rect.bottom() - bh),
+                                ],
+                                egui::Stroke::new(1.0, egui::Color32::from_gray(200)),
+                            );
+                        }
+                    }
+                });
+
+                ui.separator();
+                let (undos, redos) =
+                    with_gpu(frame, |gpu, _, _| gpu.history_labels()).unwrap_or_default();
+                egui::CollapsingHeader::new(format!(
+                    "History  ({} / {})",
+                    undos.len(),
+                    redos.len()
+                ))
                 .show(ui, |ui| {
                     // Future states (redoable), furthest first.
                     for (i, l) in redos.iter().enumerate().rev() {
@@ -1354,159 +1493,208 @@ impl eframe::App for PigmentApp {
                     }
                 });
 
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.heading("Layers");
-                if ui
-                    .button(egui::RichText::new(crate::icons::PLUS_LAYER).size(18.0))
-                    .on_hover_text("New layer")
-                    .clicked()
-                {
-                    let id = self.doc.layers.add_raster(format!("Layer {}", self.doc.layers.layers.len()));
-                    self.doc.active_layer = Some(id);
-                }
-                ui.menu_button("Adj", |ui| {
-                    for adj in Adjustment::DEFAULTS {
-                        if ui.button(adj.name()).clicked() {
-                            let id = self.doc.layers.add_adjustment(adj);
-                            self.doc.active_layer = Some(id);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.heading("Layers");
+                    if ui
+                        .button(egui::RichText::new(crate::icons::PLUS_LAYER).size(18.0))
+                        .on_hover_text("New layer")
+                        .clicked()
+                    {
+                        let id = self
+                            .doc
+                            .layers
+                            .add_raster(format!("Layer {}", self.doc.layers.layers.len()));
+                        self.doc.active_layer = Some(id);
+                    }
+                    ui.menu_button("Adj", |ui| {
+                        for adj in Adjustment::DEFAULTS {
+                            if ui.button(adj.name()).clicked() {
+                                let id = self.doc.layers.add_adjustment(adj);
+                                self.doc.active_layer = Some(id);
+                                ui.close_menu();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("New adjustment layer");
+                    ui.menu_button("Mask", |ui| {
+                        let has = self.masked_layers.contains(&self.active_id());
+                        if ui.button("Add white mask").clicked() {
+                            self.add_mask(frame, false);
                             ui.close_menu();
                         }
-                    }
-                })
-                .response
-                .on_hover_text("New adjustment layer");
-                ui.menu_button("Mask", |ui| {
-                    let has = self.masked_layers.contains(&self.active_id());
-                    if ui.button("Add white mask").clicked() {
-                        self.add_mask(frame, false);
-                        ui.close_menu();
-                    }
-                    if ui.add_enabled(self.selection_active, egui::Button::new("Add from selection")).clicked() {
-                        self.add_mask(frame, true);
-                        ui.close_menu();
-                    }
-                    if ui.add_enabled(has, egui::Button::new("Delete mask")).clicked() {
-                        self.delete_mask(frame);
-                        ui.close_menu();
-                    }
-                    ui.add_enabled(has, egui::Checkbox::new(&mut self.edit_mask, "Edit mask (brush=reveal, eraser=hide)"));
-                });
-            });
-            ui.separator();
-
-            let active = self.active_id();
-            let mut action = LayerAction::None;
-            let ids: Vec<LayerId> = self.doc.layers.layers.iter().rev().map(|l| l.id).collect();
-            for id in ids {
-                let layer = self.doc.layers.get_mut(id).unwrap();
-                let is_active = id == active;
-                egui::Frame::NONE
-                    .fill(if is_active {
-                        egui::Color32::from_rgb(50, 70, 100)
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    })
-                    .inner_margin(4.0)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let eye = if layer.visible { crate::icons::EYE } else { " " };
-                            if ui
-                                .selectable_label(layer.visible, egui::RichText::new(eye).size(15.0))
-                                .on_hover_text("Toggle visibility")
-                                .clicked()
-                            {
-                                layer.visible = !layer.visible;
-                            }
-                            ui.add(egui::TextEdit::singleline(&mut layer.name).desired_width(90.0));
-                            if ui.small_button(crate::icons::ARROW_UP).on_hover_text("Move up").clicked() {
-                                action = LayerAction::MoveUp(id);
-                            }
-                            if ui.small_button(crate::icons::ARROW_DOWN).on_hover_text("Move down").clicked() {
-                                action = LayerAction::MoveDown(id);
-                            }
-                            if ui.small_button(crate::icons::TRASH).on_hover_text("Delete layer").clicked() {
-                                action = LayerAction::Delete(id);
-                            }
-                        });
-                        let is_adjustment = matches!(layer.kind, LayerKind::Adjustment(_));
-                        ui.horizontal(|ui| {
-                            if ui.selectable_label(is_active, "active").clicked() {
-                                self.doc.active_layer = Some(id);
-                            }
-                            if !is_adjustment {
-                                egui::ComboBox::from_id_salt(("blend", id.0))
-                                    .selected_text(format!("{:?}", layer.blend))
-                                    .width(120.0)
-                                    .show_ui(ui, |ui| {
-                                        for mode in BlendMode::ALL {
-                                            ui.selectable_value(&mut layer.blend, mode, format!("{mode:?}"));
-                                        }
-                                    });
-                            }
-                        });
-                        ui.add(
-                            egui::Slider::new(&mut layer.opacity, 0.0..=1.0)
-                                .show_value(false)
-                                .text("opacity"),
+                        if ui
+                            .add_enabled(
+                                self.selection_active,
+                                egui::Button::new("Add from selection"),
+                            )
+                            .clicked()
+                        {
+                            self.add_mask(frame, true);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(has, egui::Button::new("Delete mask"))
+                            .clicked()
+                        {
+                            self.delete_mask(frame);
+                            ui.close_menu();
+                        }
+                        ui.add_enabled(
+                            has,
+                            egui::Checkbox::new(
+                                &mut self.edit_mask,
+                                "Edit mask (brush=reveal, eraser=hide)",
+                            ),
                         );
-                        match &mut layer.kind {
-                            LayerKind::Adjustment(adj) => adjustment_ui(ui, adj),
-                            LayerKind::Text(t) => {
-                                ui.add(egui::TextEdit::singleline(&mut t.text).desired_width(150.0));
-                                ui.add(egui::Slider::new(&mut t.font_px, 6.0..=300.0).text("size"));
-                                let mut col = srgba_to_color(t.color);
-                                if ui.color_edit_button_srgba(&mut col).changed() {
-                                    t.color = color_to_srgba(col);
-                                }
-                                ui.horizontal(|ui| {
-                                    ui.selectable_value(&mut t.align, 0, "L");
-                                    ui.selectable_value(&mut t.align, 1, "C");
-                                    ui.selectable_value(&mut t.align, 2, "R");
-                                });
-                            }
-                            LayerKind::Vector(v) => {
-                                let mut col = srgba_to_color(v.color);
-                                if ui.color_edit_button_srgba(&mut col).changed() {
-                                    v.color = color_to_srgba(col);
-                                }
-                            }
-                            _ => {}
-                        }
                     });
+                });
                 ui.separator();
-            }
 
-            // Apply structural layer changes after the loop.
-            let ls = &mut self.doc.layers.layers;
-            match action {
-                LayerAction::None => {}
-                LayerAction::Delete(id) => {
-                    if ls.len() > 1 {
-                        ls.retain(|l| l.id != id);
-                        with_gpu(frame, |gpu, _, _| gpu.drop_layer(id));
-                        if self.doc.active_layer == Some(id) {
-                            self.doc.active_layer = ls.last().map(|l| l.id);
+                let active = self.active_id();
+                let mut action = LayerAction::None;
+                let ids: Vec<LayerId> = self.doc.layers.layers.iter().rev().map(|l| l.id).collect();
+                for id in ids {
+                    let layer = self.doc.layers.get_mut(id).unwrap();
+                    let is_active = id == active;
+                    egui::Frame::NONE
+                        .fill(if is_active {
+                            egui::Color32::from_rgb(50, 70, 100)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        })
+                        .inner_margin(4.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let eye = if layer.visible {
+                                    crate::icons::EYE
+                                } else {
+                                    " "
+                                };
+                                if ui
+                                    .selectable_label(
+                                        layer.visible,
+                                        egui::RichText::new(eye).size(15.0),
+                                    )
+                                    .on_hover_text("Toggle visibility")
+                                    .clicked()
+                                {
+                                    layer.visible = !layer.visible;
+                                }
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut layer.name).desired_width(90.0),
+                                );
+                                if ui
+                                    .small_button(crate::icons::ARROW_UP)
+                                    .on_hover_text("Move up")
+                                    .clicked()
+                                {
+                                    action = LayerAction::MoveUp(id);
+                                }
+                                if ui
+                                    .small_button(crate::icons::ARROW_DOWN)
+                                    .on_hover_text("Move down")
+                                    .clicked()
+                                {
+                                    action = LayerAction::MoveDown(id);
+                                }
+                                if ui
+                                    .small_button(crate::icons::TRASH)
+                                    .on_hover_text("Delete layer")
+                                    .clicked()
+                                {
+                                    action = LayerAction::Delete(id);
+                                }
+                            });
+                            let is_adjustment = matches!(layer.kind, LayerKind::Adjustment(_));
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(is_active, "active").clicked() {
+                                    self.doc.active_layer = Some(id);
+                                }
+                                if !is_adjustment {
+                                    egui::ComboBox::from_id_salt(("blend", id.0))
+                                        .selected_text(format!("{:?}", layer.blend))
+                                        .width(120.0)
+                                        .show_ui(ui, |ui| {
+                                            for mode in BlendMode::ALL {
+                                                ui.selectable_value(
+                                                    &mut layer.blend,
+                                                    mode,
+                                                    format!("{mode:?}"),
+                                                );
+                                            }
+                                        });
+                                }
+                            });
+                            ui.add(
+                                egui::Slider::new(&mut layer.opacity, 0.0..=1.0)
+                                    .show_value(false)
+                                    .text("opacity"),
+                            );
+                            match &mut layer.kind {
+                                LayerKind::Adjustment(adj) => adjustment_ui(ui, adj),
+                                LayerKind::Text(t) => {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut t.text)
+                                            .desired_width(150.0),
+                                    );
+                                    ui.add(
+                                        egui::Slider::new(&mut t.font_px, 6.0..=300.0).text("size"),
+                                    );
+                                    let mut col = srgba_to_color(t.color);
+                                    if ui.color_edit_button_srgba(&mut col).changed() {
+                                        t.color = color_to_srgba(col);
+                                    }
+                                    ui.horizontal(|ui| {
+                                        ui.selectable_value(&mut t.align, 0, "L");
+                                        ui.selectable_value(&mut t.align, 1, "C");
+                                        ui.selectable_value(&mut t.align, 2, "R");
+                                    });
+                                }
+                                LayerKind::Vector(v) => {
+                                    let mut col = srgba_to_color(v.color);
+                                    if ui.color_edit_button_srgba(&mut col).changed() {
+                                        v.color = color_to_srgba(col);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        });
+                    ui.separator();
+                }
+
+                // Apply structural layer changes after the loop.
+                let ls = &mut self.doc.layers.layers;
+                match action {
+                    LayerAction::None => {}
+                    LayerAction::Delete(id) => {
+                        if ls.len() > 1 {
+                            ls.retain(|l| l.id != id);
+                            with_gpu(frame, |gpu, _, _| gpu.drop_layer(id));
+                            if self.doc.active_layer == Some(id) {
+                                self.doc.active_layer = ls.last().map(|l| l.id);
+                            }
+                            self.background_id =
+                                ls.first().map(|l| l.id).unwrap_or(self.background_id);
                         }
-                        self.background_id = ls.first().map(|l| l.id).unwrap_or(self.background_id);
+                    }
+                    LayerAction::MoveUp(id) => {
+                        if let Some(i) = ls.iter().position(|l| l.id == id) {
+                            if i + 1 < ls.len() {
+                                ls.swap(i, i + 1);
+                            }
+                        }
+                    }
+                    LayerAction::MoveDown(id) => {
+                        if let Some(i) = ls.iter().position(|l| l.id == id) {
+                            if i > 0 {
+                                ls.swap(i, i - 1);
+                            }
+                        }
                     }
                 }
-                LayerAction::MoveUp(id) => {
-                    if let Some(i) = ls.iter().position(|l| l.id == id) {
-                        if i + 1 < ls.len() {
-                            ls.swap(i, i + 1);
-                        }
-                    }
-                }
-                LayerAction::MoveDown(id) => {
-                    if let Some(i) = ls.iter().position(|l| l.id == id) {
-                        if i > 0 {
-                            ls.swap(i, i - 1);
-                        }
-                    }
-                }
-            }
-        });
+            });
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(30)))
@@ -1522,7 +1710,8 @@ impl eframe::App for PigmentApp {
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll != 0.0 {
                     if let Some(cursor) = response.hover_pos() {
-                        self.view.zoom_to((scroll * 0.0015).exp(), cursor - rect.center());
+                        self.view
+                            .zoom_to((scroll * 0.0015).exp(), cursor - rect.center());
                     }
                 }
 
@@ -1558,8 +1747,10 @@ impl eframe::App for PigmentApp {
                 }
 
                 let img = egui::vec2(self.doc.size.width as f32, self.doc.size.height as f32);
-                let doc_rect =
-                    egui::Rect::from_center_size(rect.center() + self.view.pan, img * self.view.zoom);
+                let doc_rect = egui::Rect::from_center_size(
+                    rect.center() + self.view.pan,
+                    img * self.view.zoom,
+                );
 
                 let mut dabs: Vec<Dab> = Vec::new();
                 let mut begin_command = false;
@@ -1570,8 +1761,8 @@ impl eframe::App for PigmentApp {
                 let erase = self.tool == Tool::Eraser;
                 let paint_mask = self.edit_mask && self.masked_layers.contains(&self.active_id());
                 let dirty_radius = self.brush_size * 0.5 + 1.0; // max dab extent
-                // Brush paints full-coverage dabs into the wet layer (opacity is
-                // applied when flattening). Eraser paints directly at its strength.
+                                                                // Brush paints full-coverage dabs into the wet layer (opacity is
+                                                                // applied when flattening). Eraser paints directly at its strength.
                 let dab_alpha = if erase { self.brush_opacity } else { 1.0 };
                 match self.tool {
                     Tool::Move => {
@@ -1612,7 +1803,11 @@ impl eframe::App for PigmentApp {
                         }
                     }
                     Tool::ShapeRect | Tool::ShapeEllipse => {
-                        let kind = if self.tool == Tool::ShapeEllipse { 1 } else { 0 };
+                        let kind = if self.tool == Tool::ShapeEllipse {
+                            1
+                        } else {
+                            0
+                        };
                         if response.drag_started() {
                             if let Some(p) = response.interact_pointer_pos() {
                                 let s = screen_to_doc(p, doc_rect, self.doc.size);
@@ -1626,16 +1821,22 @@ impl eframe::App for PigmentApp {
                                 ];
                                 let id = self.doc.layers.add_vector(
                                     "Shape",
-                                    VectorDef { kind, rect: [s.x, s.y, 0.0, 0.0], color },
+                                    VectorDef {
+                                        kind,
+                                        rect: [s.x, s.y, 0.0, 0.0],
+                                        color,
+                                    },
                                 );
                                 self.doc.active_layer = Some(id);
                                 self.shape_drag = Some(id);
                             }
                         }
                         if response.dragged() {
-                            if let (Some(s), Some(p), Some(id)) =
-                                (self.sel_drag_start, response.interact_pointer_pos(), self.shape_drag)
-                            {
+                            if let (Some(s), Some(p), Some(id)) = (
+                                self.sel_drag_start,
+                                response.interact_pointer_pos(),
+                                self.shape_drag,
+                            ) {
                                 let cur = screen_to_doc(p, doc_rect, self.doc.size);
                                 let rect = [
                                     s.x.min(cur.x),
@@ -1715,7 +1916,11 @@ impl eframe::App for PigmentApp {
                                         let dir = seg / dist;
                                         let mut t = self.stroke_residual;
                                         while t <= dist {
-                                            dabs.push(self.dab_at(last + dir * t, dab_alpha, scale));
+                                            dabs.push(self.dab_at(
+                                                last + dir * t,
+                                                dab_alpha,
+                                                scale,
+                                            ));
                                             t += spacing;
                                         }
                                         self.stroke_residual = t - dist;
@@ -1727,7 +1932,8 @@ impl eframe::App for PigmentApp {
                             ui.ctx().request_repaint();
                         }
                         if response.drag_stopped()
-                            || (self.stroke_last.is_some() && response.interact_pointer_pos().is_none())
+                            || (self.stroke_last.is_some()
+                                && response.interact_pointer_pos().is_none())
                         {
                             if self.wet_active {
                                 wet_end = true;
@@ -1762,7 +1968,8 @@ impl eframe::App for PigmentApp {
                         let ellipse = self.tool == Tool::SelectEllipse;
                         if response.drag_started() {
                             if let Some(p) = response.interact_pointer_pos() {
-                                self.sel_drag_start = Some(screen_to_doc(p, doc_rect, self.doc.size));
+                                self.sel_drag_start =
+                                    Some(screen_to_doc(p, doc_rect, self.doc.size));
                                 self.sel_mode = mode_from_modifiers(ui.input(|i| i.modifiers));
                                 self.sel_base = self.read_selection(frame);
                             }
@@ -1794,13 +2001,18 @@ impl eframe::App for PigmentApp {
                             self.sel_mode = mode_from_modifiers(ui.input(|i| i.modifiers));
                             self.sel_base = self.read_selection(frame);
                             if let Some(p) = response.interact_pointer_pos() {
-                                self.lasso_points.push(screen_to_doc(p, doc_rect, self.doc.size));
+                                self.lasso_points
+                                    .push(screen_to_doc(p, doc_rect, self.doc.size));
                             }
                         }
                         if response.dragged() {
                             if let Some(p) = response.interact_pointer_pos() {
                                 let d = screen_to_doc(p, doc_rect, self.doc.size);
-                                if self.lasso_points.last().is_none_or(|l| (*l - d).length() > 2.0) {
+                                if self
+                                    .lasso_points
+                                    .last()
+                                    .is_none_or(|l| (*l - d).length() > 2.0)
+                                {
                                     self.lasso_points.push(d);
                                 }
                             }
@@ -1873,7 +2085,11 @@ impl eframe::App for PigmentApp {
                     _ => "Brush",
                 };
                 let xform = if self.xform_active {
-                    Some(compute_xform(self.xform_translate, self.xform_scale, self.doc.size))
+                    Some(compute_xform(
+                        self.xform_translate,
+                        self.xform_scale,
+                        self.doc.size,
+                    ))
                 } else {
                     None
                 };

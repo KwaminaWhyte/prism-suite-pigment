@@ -185,21 +185,13 @@ pub fn combine(base: &[f32], other: &[f32], mode: CombineMode) -> Vec<f32> {
     }
     match mode {
         CombineMode::Replace => other.to_vec(),
-        CombineMode::Add => base
-            .iter()
-            .zip(other)
-            .map(|(&a, &b)| a.max(b))
-            .collect(),
+        CombineMode::Add => base.iter().zip(other).map(|(&a, &b)| a.max(b)).collect(),
         CombineMode::Subtract => base
             .iter()
             .zip(other)
             .map(|(&a, &b)| a.min(1.0 - b))
             .collect(),
-        CombineMode::Intersect => base
-            .iter()
-            .zip(other)
-            .map(|(&a, &b)| a.min(b))
-            .collect(),
+        CombineMode::Intersect => base.iter().zip(other).map(|(&a, &b)| a.min(b)).collect(),
     }
 }
 

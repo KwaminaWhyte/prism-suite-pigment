@@ -26,6 +26,17 @@ env_logger = "0.11"
 pigment-core = { path = "crates/pigment-core" }
 pigment-io = { path = "crates/pigment-io" }
 
+# Lints applied across the workspace (crates opt in via `[lints] workspace = true`).
+# These are deliberate: per-channel index loops read clearer than iterators, the
+# GPU helpers genuinely need many args, and egui 0.34 deprecations are mid-cycle.
+[workspace.lints.clippy]
+needless_range_loop = "allow"
+too_many_arguments = "allow"
+field_reassign_with_default = "allow"
+
+[workspace.lints.rust]
+deprecated = "allow"
+
 [profile.dev]
 opt-level = 1          # keep the app usable while iterating
 

@@ -35,7 +35,7 @@ fn bucket(v: f32, bins: usize) -> usize {
 /// Guards: `bins` must be `>= 2`, and `rgba.len()` must be a multiple of 4;
 /// otherwise all-zero histograms are returned.
 pub fn histogram(rgba: &[f32], bins: usize) -> Histogram {
-    if bins < 2 || rgba.len() % 4 != 0 {
+    if bins < 2 || !rgba.len().is_multiple_of(4) {
         return Histogram::zeros(bins.max(0));
     }
 
@@ -61,7 +61,7 @@ mod tests {
     fn solid_mid_gray() {
         let bins = 256;
         let n = 100; // pixels
-        // 0.5 linear: bucket = floor(0.5 * 255) = 127 for r/g/b.
+                     // 0.5 linear: bucket = floor(0.5 * 255) = 127 for r/g/b.
         let mut rgba = Vec::with_capacity(n * 4);
         for _ in 0..n {
             rgba.extend_from_slice(&[0.5, 0.5, 0.5, 1.0]);

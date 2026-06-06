@@ -44,14 +44,18 @@ pub struct Tile {
 impl Tile {
     pub fn transparent() -> Arc<Tile> {
         let len = (TILE_SIZE * TILE_SIZE * 4) as usize;
-        Arc::new(Tile { pixels: vec![0.0; len].into_boxed_slice() })
+        Arc::new(Tile {
+            pixels: vec![0.0; len].into_boxed_slice(),
+        })
     }
 }
 
 impl Default for Tile {
     fn default() -> Self {
         let len = (TILE_SIZE * TILE_SIZE * 4) as usize;
-        Tile { pixels: vec![0.0; len].into_boxed_slice() }
+        Tile {
+            pixels: vec![0.0; len].into_boxed_slice(),
+        }
     }
 }
 

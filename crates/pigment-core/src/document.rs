@@ -16,6 +16,10 @@ impl Document {
     pub fn new(size: Size) -> Self {
         let mut layers = LayerTree::new();
         let bg = layers.add_raster("Background");
-        Self { size, layers, active_layer: Some(bg) }
+        Self {
+            size,
+            layers,
+            active_layer: Some(bg),
+        }
     }
 }

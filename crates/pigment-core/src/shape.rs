@@ -98,9 +98,8 @@ pub fn fill_shape(
                     let q = (nx * nx + ny * ny).sqrt();
                     // Convert the normalized distance to an approximate pixel
                     // distance using the gradient magnitude, for ~1px AA.
-                    let grad = (((px - cx) / (rx * rx)).powi(2)
-                        + ((py - cy) / (ry * ry)).powi(2))
-                    .sqrt();
+                    let grad =
+                        (((px - cx) / (rx * rx)).powi(2) + ((py - cy) / (ry * ry)).powi(2)).sqrt();
                     let d = if grad > 0.0 {
                         (q - 1.0) / grad
                     } else {
@@ -262,7 +261,13 @@ mod tests {
         let h = 3;
         // Straight color with alpha 0.5 -> premultiplied rgb = rgb*0.5.
         let color = [0.4, 0.6, 0.8, 0.5];
-        let buf = fill_shape(ShapeKind::Rectangle, [0.0, 0.0, w as f32, h as f32], color, w, h);
+        let buf = fill_shape(
+            ShapeKind::Rectangle,
+            [0.0, 0.0, w as f32, h as f32],
+            color,
+            w,
+            h,
+        );
         let expected = [0.4 * 0.5, 0.6 * 0.5, 0.8 * 0.5, 0.5];
         for y in 0..h {
             for x in 0..w {
@@ -305,14 +310,7 @@ mod tests {
         let w = 11;
         let h = 11;
         let mid = (h / 2) as f32 + 0.5;
-        let buf = stroke_line(
-            (0.0, mid),
-            (w as f32, mid),
-            1.0,
-            [1.0, 1.0, 1.0, 1.0],
-            w,
-            h,
-        );
+        let buf = stroke_line((0.0, mid), (w as f32, mid), 1.0, [1.0, 1.0, 1.0, 1.0], w, h);
         // Center row marked.
         for x in 1..w - 1 {
             let p = px(&buf, w, x, h / 2);
@@ -323,7 +321,11 @@ mod tests {
             let top = px(&buf, w, x, 0);
             let bot = px(&buf, w, x, h - 1);
             assert!(top[3] < EPS, "top row ({x}) alpha {} should be ~0", top[3]);
-            assert!(bot[3] < EPS, "bottom row ({x}) alpha {} should be ~0", bot[3]);
+            assert!(
+                bot[3] < EPS,
+                "bottom row ({x}) alpha {} should be ~0",
+                bot[3]
+            );
         }
     }
 

@@ -61,18 +61,16 @@ pub enum DocError {
     #[error("lz4 decompress failed: {0}")]
     Decompress(#[from] lz4_flex::block::DecompressError),
 
-    #[error(
-        "pixel length mismatch for layer {id}: expected {expected} bytes, got {actual}"
-    )]
-    LengthMismatch { id: u64, expected: usize, actual: usize },
+    #[error("pixel length mismatch for layer {id}: expected {expected} bytes, got {actual}")]
+    LengthMismatch {
+        id: u64,
+        expected: usize,
+        actual: usize,
+    },
 }
 
 /// Serialize the document to `path`.
-pub fn save_document(
-    path: &Path,
-    meta: &DocMeta,
-    pixels: &[LayerPixels],
-) -> Result<(), DocError> {
+pub fn save_document(path: &Path, meta: &DocMeta, pixels: &[LayerPixels]) -> Result<(), DocError> {
     let file = std::fs::File::create(path)?;
     let mut w = BufWriter::new(file);
 
@@ -197,8 +195,14 @@ mod tests {
         let px0: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
         let px1: Vec<u8> = (0..len).map(|i| (i.wrapping_mul(7) % 253) as u8).collect();
         let pixels = vec![
-            LayerPixels { id: 1, rgba16f: px0.clone() },
-            LayerPixels { id: 2, rgba16f: px1.clone() },
+            LayerPixels {
+                id: 1,
+                rgba16f: px0.clone(),
+            },
+            LayerPixels {
+                id: 2,
+                rgba16f: px1.clone(),
+            },
         ];
 
         let mut path = std::env::temp_dir();
