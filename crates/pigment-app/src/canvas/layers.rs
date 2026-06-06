@@ -210,6 +210,7 @@ impl CanvasGpu {
         self.selection = Some(make_target_fmt(device, size, "selection", SEL_FMT));
         self.selection_tmp = Some(make_target_fmt(device, size, "selection.tmp", SEL_FMT));
         self.has_selection = false;
+        self.channels.clear();
         self.xform_layer = None;
         self.composite_valid = false;
         self.stroke_owner = None;

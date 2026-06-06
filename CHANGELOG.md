@@ -7,6 +7,9 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Channels panel** (Phase 7). Save the current selection as a named alpha channel,
+  load a channel back into the selection, or delete it (Channels panel section).
+  GPU round-trip-tested.
 - **Clipping masks** (Phase 7). A layer can clip to the layer directly below — its
   alpha gates where the layer shows, evaluated in the compositor via a clip-base
   texture binding. Per-layer "Clip to layer below" toggle; GPU pixel-tested.

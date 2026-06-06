@@ -372,6 +372,37 @@ impl eframe::App for PigmentApp {
                 });
 
                 ui.separator();
+                egui::CollapsingHeader::new("Channels").show(ui, |ui| {
+                    let names =
+                        with_gpu(frame, |gpu, _, _| gpu.channel_names()).unwrap_or_default();
+                    if ui
+                        .add_enabled(
+                            self.selection_active,
+                            egui::Button::new("Save selection as channel"),
+                        )
+                        .clicked()
+                    {
+                        let name = format!("Alpha {}", names.len() + 1);
+                        with_gpu(frame, |gpu, d, q| gpu.save_selection_as_channel(d, q, name));
+                    }
+                    for name in names {
+                        ui.horizontal(|ui| {
+                            ui.label(&name);
+                            if ui.small_button("Load").clicked() {
+                                let n = name.clone();
+                                with_gpu(frame, |gpu, d, q| gpu.load_channel(d, q, &n));
+                                self.selection_active = true;
+                                self.force_composite = true;
+                            }
+                            if ui.small_button("✕").clicked() {
+                                let n = name.clone();
+                                with_gpu(frame, |gpu, _, _| gpu.delete_channel(&n));
+                            }
+                        });
+                    }
+                });
+
+                ui.separator();
                 egui::CollapsingHeader::new("Histogram").show(ui, |ui| {
                     if ui.button("Refresh").clicked() {
                         self.refresh_histogram(frame);

@@ -326,6 +326,8 @@ pub struct CanvasGpu {
     selection: Option<GpuLayer>,
     selection_tmp: Option<GpuLayer>,
     has_selection: bool,
+    /// Saved selections (alpha channels): name → R16Float mask, canvas-sized.
+    channels: Vec<(String, GpuLayer)>,
     shape_pipeline: wgpu::RenderPipeline,
     shape_bgl: wgpu::BindGroupLayout,
     shape_uniform: wgpu::Buffer,
@@ -684,6 +686,7 @@ impl CanvasGpu {
             selection: None,
             selection_tmp: None,
             has_selection: false,
+            channels: Vec::new(),
             shape_pipeline,
             shape_bgl,
             shape_uniform,
@@ -703,6 +706,7 @@ impl CanvasGpu {
 }
 
 mod brush;
+mod channels;
 mod clone;
 mod command;
 mod compositor;

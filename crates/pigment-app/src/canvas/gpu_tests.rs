@@ -496,6 +496,77 @@ fn clipping_mask_gates_by_base_alpha() {
     );
 }
 
+// Channels: save a left-half selection, clear it, reload from the channel, then
+// paint — the restored selection clips the paint to the left half.
+#[test]
+fn channel_save_load_roundtrip() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping channel_save_load_roundtrip");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(8, 8);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
+
+    // Select the left half and save it as a channel.
+    let mut enc = device.create_command_encoder(&Default::default());
+    gpu.apply_selection(
+        &device,
+        &queue,
+        &mut enc,
+        &SelectionOp::Marquee {
+            rect: [0.0, 0.0, 4.0, 8.0],
+            ellipse: false,
+        },
+    );
+    queue.submit([enc.finish()]);
+    gpu.save_selection_as_channel(&device, &queue, "a".to_string());
+
+    // Clear the selection, then reload it from the channel.
+    let mut enc = device.create_command_encoder(&Default::default());
+    gpu.apply_selection(&device, &queue, &mut enc, &SelectionOp::None);
+    queue.submit([enc.finish()]);
+    gpu.load_channel(&device, &queue, "a");
+    assert!(gpu.has_selection(), "selection restored from channel");
+
+    // Paint blue over the whole canvas; the restored selection clips it left.
+    let dab = Dab {
+        center: [4.0, 4.0],
+        radius: 16.0,
+        hardness: 0.99,
+        color: [0.0, 0.0, 1.0, 1.0],
+    };
+    let mut enc = device.create_command_encoder(&Default::default());
+    gpu.paint_dabs(&device, &queue, &mut enc, l0, &[dab], false, false, false);
+    queue.submit([enc.finish()]);
+
+    let order = vec![LayerDraw {
+        id: l0,
+        opacity: 1.0,
+        blend: 0,
+        visible: true,
+        adjust_kind: 0,
+        adjust: [0.0; 4],
+        has_blend_if: false,
+        blend_if: [0.0, 1.0, 0.0, 1.0],
+        clipped: false,
+    }];
+    let p = gpu.composite_now(&device, &queue, &order);
+    let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
+    let right = gpu.read_composite_pixel(&device, &queue, p, 6, 4).unwrap();
+    assert!(
+        left[2] > 0.5,
+        "restored selection paints left blue: {left:?}"
+    );
+    assert!(
+        right[0] > 0.5 && right[2] < 0.2,
+        "right half untouched red: {right:?}"
+    );
+}
+
 // A layer mask (0 on the left half) hides those pixels in the composite.
 #[test]
 fn layer_mask_hides() {
