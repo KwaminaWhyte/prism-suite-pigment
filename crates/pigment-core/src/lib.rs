@@ -5,6 +5,7 @@
 //! nothing about wgpu — rendering lives in `pigment-gpu`, and the app wires the
 //! two together. See PLAN.md §2.
 
+pub mod adjust;
 pub mod blend;
 pub mod color;
 pub mod curve;
@@ -16,6 +17,7 @@ pub mod layer;
 pub mod raster;
 pub mod tile;
 
+pub use adjust::Adjustment;
 pub use blend::BlendMode;
 pub use color::Rgba;
 pub use document::Document;

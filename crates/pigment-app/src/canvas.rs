@@ -27,6 +27,9 @@ pub struct LayerDraw {
     pub opacity: f32,
     pub blend: u32,
     pub visible: bool,
+    /// 0 = raster layer; else an adjustment kind applied to the backdrop.
+    pub adjust_kind: u32,
+    pub adjust: [f32; 4],
 }
 
 /// A selection operation requested by the app for this frame.
@@ -89,15 +92,25 @@ struct CompositeParams {
     opacity: f32,
     blend_mode: u32,
     has_xform: u32,
-    _p0: u32,
+    adjust_kind: u32,
     m: [f32; 4],
     off: [f32; 2],
     _p1: [f32; 2],
+    adjust: [f32; 4],
 }
 
 impl CompositeParams {
     fn plain(opacity: f32, blend_mode: u32) -> Self {
-        Self { opacity, blend_mode, has_xform: 0, _p0: 0, m: [1.0, 0.0, 0.0, 1.0], off: [0.0; 2], _p1: [0.0; 2] }
+        Self {
+            opacity,
+            blend_mode,
+            has_xform: 0,
+            adjust_kind: 0,
+            m: [1.0, 0.0, 0.0, 1.0],
+            off: [0.0; 2],
+            _p1: [0.0; 2],
+            adjust: [0.0; 4],
+        }
     }
 }
 
@@ -506,10 +519,11 @@ impl CanvasGpu {
             opacity: 1.0,
             blend_mode: 0,
             has_xform: 1,
-            _p0: 0,
+            adjust_kind: 0,
             m: self.xform_m,
             off: self.xform_off,
             _p1: [0.0; 2],
+            adjust: [0.0; 4],
         };
         queue.write_buffer(&self.params_buf, WET_PARAMS_OFFSET as u64, bytemuck::bytes_of(&p));
         // Clear ping (transparent backdrop).
@@ -1165,6 +1179,8 @@ impl CanvasGpu {
         let visible: Vec<&LayerDraw> = order.iter().filter(|l| l.visible).collect();
         for (i, l) in visible.iter().enumerate() {
             let mut p = CompositeParams::plain(l.opacity, l.blend);
+            p.adjust_kind = l.adjust_kind;
+            p.adjust = l.adjust;
             if self.xform_layer == Some(l.id) {
                 p.has_xform = 1;
                 p.m = self.xform_m;
@@ -1560,7 +1576,7 @@ mod gpu_tests {
         gpu.ensure_layer(&device, l0);
         gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
 
-        let order = vec![LayerDraw { id: l0, opacity: 1.0, blend: 0, visible: true }];
+        let order = vec![LayerDraw { id: l0, opacity: 1.0, blend: 0, visible: true, adjust_kind: 0, adjust: [0.0; 4] }];
         let p = gpu.composite_now(&device, &queue, &order);
         let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
         assert!(px[0] > 0.9 && px[1] < 0.1 && px[3] > 0.9, "composite red: {px:?}");
@@ -1604,7 +1620,7 @@ mod gpu_tests {
         let l0 = LayerId(0);
         gpu.ensure_layer(&device, l0);
         gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
-        let order = vec![LayerDraw { id: l0, opacity: 1.0, blend: 0, visible: true }];
+        let order = vec![LayerDraw { id: l0, opacity: 1.0, blend: 0, visible: true, adjust_kind: 0, adjust: [0.0; 4] }];
 
         // Select the left half, then paint blue over the whole canvas.
         let mut enc = device.create_command_encoder(&Default::default());
@@ -1651,5 +1667,32 @@ mod gpu_tests {
         let right = gpu.read_pixel(&device, &queue, l0, 6, 4).unwrap();
         assert!(left[3] < 0.1, "left half cleared after move: {left:?}");
         assert!(right[0] > 0.9 && right[3] > 0.9, "right half keeps red: {right:?}");
+    }
+
+    // An Invert adjustment layer over a red layer yields cyan in the composite.
+    #[test]
+    fn adjustment_invert() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping adjustment_invert");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        let l1 = LayerId(1);
+        gpu.ensure_layer(&device, l0);
+        gpu.ensure_layer(&device, l1); // adjustment layer (no pixels needed)
+        gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
+
+        let (k, p) = pigment_core::adjust::Adjustment::Invert.encode();
+        let order = vec![
+            LayerDraw { id: l0, opacity: 1.0, blend: 0, visible: true, adjust_kind: 0, adjust: [0.0; 4] },
+            LayerDraw { id: l1, opacity: 1.0, blend: 0, visible: true, adjust_kind: k, adjust: p },
+        ];
+        let pp = gpu.composite_now(&device, &queue, &order);
+        let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
+        // Inverted red (premultiplied, alpha 1): low red, high green+blue.
+        assert!(px[0] < 0.2 && px[1] > 0.8 && px[2] > 0.8, "invert red -> cyan: {px:?}");
     }
 }

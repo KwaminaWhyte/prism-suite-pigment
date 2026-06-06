@@ -7,7 +7,8 @@ use half::f16;
 use pigment_core::color::{linear_to_srgb, srgb_to_linear};
 use pigment_core::fill::flood_fill_mask;
 use pigment_core::raster::{self, CombineMode};
-use pigment_core::{BlendMode, Document, Layer, LayerId, Size};
+use pigment_core::adjust::Adjustment;
+use pigment_core::{BlendMode, Document, Layer, LayerId, LayerKind, Size};
 use pigment_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
 use pigment_io::resize::{resize_rgba_f32, Quality};
 use pigment_io::LoadedImage;
@@ -435,6 +436,13 @@ impl PigmentApp {
             l.visible.hash(&mut h);
             l.blend.shader_id().hash(&mut h);
             l.opacity.to_bits().hash(&mut h);
+            if let LayerKind::Adjustment(a) = &l.kind {
+                let (k, p) = a.encode();
+                k.hash(&mut h);
+                for v in p {
+                    v.to_bits().hash(&mut h);
+                }
+            }
         }
         h.finish()
     }
@@ -448,11 +456,19 @@ impl PigmentApp {
             .layers
             .layers
             .iter()
-            .map(|l| LayerDraw {
-                id: l.id,
-                opacity: l.opacity,
-                blend: l.blend.shader_id(),
-                visible: l.visible,
+            .map(|l| {
+                let (adjust_kind, adjust) = match &l.kind {
+                    LayerKind::Adjustment(a) => a.encode(),
+                    _ => (0, [0.0; 4]),
+                };
+                LayerDraw {
+                    id: l.id,
+                    opacity: l.opacity,
+                    blend: l.blend.shader_id(),
+                    visible: l.visible,
+                    adjust_kind,
+                    adjust,
+                }
             })
             .collect()
     }
@@ -745,6 +761,34 @@ fn flip(src: &[f32], w: u32, h: u32, horizontal: bool) -> Vec<f32> {
     dst
 }
 
+fn adjustment_ui(ui: &mut egui::Ui, adj: &mut Adjustment) {
+    match adj {
+        Adjustment::BrightnessContrast { brightness, contrast } => {
+            ui.add(egui::Slider::new(brightness, -0.5..=0.5).text("brightness"));
+            ui.add(egui::Slider::new(contrast, -0.5..=1.0).text("contrast"));
+        }
+        Adjustment::Levels { in_black, in_white, gamma } => {
+            ui.add(egui::Slider::new(in_black, 0.0..=1.0).text("black"));
+            ui.add(egui::Slider::new(in_white, 0.0..=1.0).text("white"));
+            ui.add(egui::Slider::new(gamma, 0.1..=4.0).text("gamma"));
+        }
+        Adjustment::HueSaturation { hue, saturation, lightness } => {
+            ui.add(egui::Slider::new(hue, -180.0..=180.0).text("hue"));
+            ui.add(egui::Slider::new(saturation, -1.0..=1.0).text("saturation"));
+            ui.add(egui::Slider::new(lightness, -0.5..=0.5).text("lightness"));
+        }
+        Adjustment::Exposure { stops } => {
+            ui.add(egui::Slider::new(stops, -3.0..=3.0).text("stops"));
+        }
+        Adjustment::Threshold { level } => {
+            ui.add(egui::Slider::new(level, 0.0..=1.0).text("level"));
+        }
+        Adjustment::Invert | Adjustment::BlackWhite => {
+            ui.label("(no parameters)");
+        }
+    }
+}
+
 fn clamp_seed(p: egui::Vec2, size: Size) -> Option<(u32, u32)> {
     if p.x < 0.0 || p.y < 0.0 || p.x >= size.width as f32 || p.y >= size.height as f32 {
         return None;
@@ -971,6 +1015,17 @@ impl eframe::App for PigmentApp {
                     let id = self.doc.layers.add_raster(format!("Layer {}", self.doc.layers.layers.len()));
                     self.doc.active_layer = Some(id);
                 }
+                ui.menu_button("Adj", |ui| {
+                    for adj in Adjustment::DEFAULTS {
+                        if ui.button(adj.name()).clicked() {
+                            let id = self.doc.layers.add_adjustment(adj);
+                            self.doc.active_layer = Some(id);
+                            ui.close_menu();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("New adjustment layer");
             });
             ui.separator();
 
@@ -1008,24 +1063,30 @@ impl eframe::App for PigmentApp {
                                 action = LayerAction::Delete(id);
                             }
                         });
+                        let is_adjustment = matches!(layer.kind, LayerKind::Adjustment(_));
                         ui.horizontal(|ui| {
                             if ui.selectable_label(is_active, "active").clicked() {
                                 self.doc.active_layer = Some(id);
                             }
-                            egui::ComboBox::from_id_salt(("blend", id.0))
-                                .selected_text(format!("{:?}", layer.blend))
-                                .width(120.0)
-                                .show_ui(ui, |ui| {
-                                    for mode in BlendMode::ALL {
-                                        ui.selectable_value(&mut layer.blend, mode, format!("{mode:?}"));
-                                    }
-                                });
+                            if !is_adjustment {
+                                egui::ComboBox::from_id_salt(("blend", id.0))
+                                    .selected_text(format!("{:?}", layer.blend))
+                                    .width(120.0)
+                                    .show_ui(ui, |ui| {
+                                        for mode in BlendMode::ALL {
+                                            ui.selectable_value(&mut layer.blend, mode, format!("{mode:?}"));
+                                        }
+                                    });
+                            }
                         });
                         ui.add(
                             egui::Slider::new(&mut layer.opacity, 0.0..=1.0)
                                 .show_value(false)
                                 .text("opacity"),
                         );
+                        if let LayerKind::Adjustment(adj) = &mut layer.kind {
+                            adjustment_ui(ui, adj);
+                        }
                     });
                 ui.separator();
             }

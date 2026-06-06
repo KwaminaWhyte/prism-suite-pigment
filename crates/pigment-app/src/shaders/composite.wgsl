@@ -6,10 +6,11 @@ struct Params {
     opacity: f32,
     blend_mode: u32,
     has_xform: u32,
-    _p0: u32,
+    adjust_kind: u32, // 0 = raster layer; else an adjustment of the backdrop
     m: vec4<f32>,    // 2x2 layer-from-canvas matrix (a,b,c,d), uv space
     off: vec2<f32>,  // uv-space offset
     _p1: vec2<f32>,
+    adjust: vec4<f32>, // adjustment params
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -97,9 +98,80 @@ fn blend_fn(mode: u32, b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
     }
 }
 
+fn l2s1(c: f32) -> f32 { if c <= 0.0031308 { return c * 12.92; } return 1.055 * pow(c, 1.0 / 2.4) - 0.055; }
+fn s2l1(c: f32) -> f32 { if c <= 0.04045 { return c / 12.92; } return pow((c + 0.055) / 1.055, 2.4); }
+fn l2s(c: vec3<f32>) -> vec3<f32> { return vec3<f32>(l2s1(c.x), l2s1(c.y), l2s1(c.z)); }
+fn s2l(c: vec3<f32>) -> vec3<f32> { return vec3<f32>(s2l1(c.x), s2l1(c.y), s2l1(c.z)); }
+
+fn rgb2hsl(c: vec3<f32>) -> vec3<f32> {
+    let mx = max(c.r, max(c.g, c.b));
+    let mn = min(c.r, min(c.g, c.b));
+    let l = (mx + mn) * 0.5;
+    var h = 0.0;
+    var s = 0.0;
+    let d = mx - mn;
+    if d > 1e-6 {
+        s = d / (1.0 - abs(2.0 * l - 1.0) + 1e-6);
+        if mx == c.r { h = (c.g - c.b) / d + select(0.0, 6.0, c.g < c.b); }
+        else if mx == c.g { h = (c.b - c.r) / d + 2.0; }
+        else { h = (c.r - c.g) / d + 4.0; }
+        h = h / 6.0;
+    }
+    return vec3<f32>(h, s, l);
+}
+fn hue2rgb(p: f32, q: f32, t_in: f32) -> f32 {
+    var t = fract(t_in);
+    if t < 1.0 / 6.0 { return p + (q - p) * 6.0 * t; }
+    if t < 0.5 { return q; }
+    if t < 2.0 / 3.0 { return p + (q - p) * (2.0 / 3.0 - t) * 6.0; }
+    return p;
+}
+fn hsl2rgb(h: f32, s: f32, l: f32) -> vec3<f32> {
+    if s <= 1e-6 { return vec3<f32>(l); }
+    let q = select(l + s - l * s, l * (1.0 + s), l < 0.5);
+    let p = 2.0 * l - q;
+    return vec3<f32>(hue2rgb(p, q, h + 1.0 / 3.0), hue2rgb(p, q, h), hue2rgb(p, q, h - 1.0 / 3.0));
+}
+
+fn apply_adjust(kind: u32, p: vec4<f32>, c_lin: vec3<f32>) -> vec3<f32> {
+    if kind == 5u {
+        return c_lin * exp2(p.x); // exposure: linear-light multiply
+    }
+    var c = clamp(l2s(c_lin), vec3<f32>(0.0), vec3<f32>(1.0)); // perceptual ops in sRGB
+    switch kind {
+        case 1u: { c = (c - 0.5) * (1.0 + p.y) + 0.5 + p.x; }
+        case 2u: {
+            let denom = max(p.y - p.x, 1e-4);
+            c = clamp((c - p.x) / denom, vec3<f32>(0.0), vec3<f32>(1.0));
+            c = pow(c, vec3<f32>(1.0 / max(p.z, 1e-3)));
+        }
+        case 3u: {
+            var hsl = rgb2hsl(c);
+            hsl.x = fract(hsl.x + p.x / 360.0);
+            hsl.y = clamp(hsl.y * (1.0 + p.y), 0.0, 1.0);
+            hsl.z = clamp(hsl.z + p.z, 0.0, 1.0);
+            c = hsl2rgb(hsl.x, hsl.y, hsl.z);
+        }
+        case 4u: { c = 1.0 - c; }
+        case 6u: { let y = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)); c = vec3<f32>(select(0.0, 1.0, y >= p.x)); }
+        case 7u: { c = vec3<f32>(dot(c, vec3<f32>(0.2126, 0.7152, 0.0722))); }
+        default: {}
+    }
+    return s2l(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let b = textureSample(backdrop, samp, in.uv);          // premultiplied
+
+    // Adjustment layer: transform the backdrop, keep its alpha, mix by opacity.
+    if params.adjust_kind != 0u {
+        let ba = max(b.a, 1e-5);
+        let bc = b.rgb / ba;
+        let adj = apply_adjust(params.adjust_kind, params.adjust, bc);
+        let mixed = mix(bc, adj, params.opacity);
+        return vec4<f32>(mixed * b.a, b.a);
+    }
     // Optional per-layer affine (move/transform preview): sample the layer at the
     // transformed uv, masking out anything that falls outside the layer.
     var luv = in.uv;

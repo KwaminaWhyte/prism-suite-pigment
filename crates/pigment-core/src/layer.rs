@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::adjust::Adjustment;
 use crate::blend::BlendMode;
 use crate::tile::{Tile, TileCoord};
 
@@ -22,7 +23,9 @@ pub enum LayerKind {
     Raster,
     /// A container compositing its children before blending into the parent.
     Group { children: Vec<Layer> },
-    // Adjustment / Text / Vector / SmartObject arrive in later phases.
+    /// A non-destructive adjustment applied to the backdrop below it.
+    Adjustment(Adjustment),
+    // Text / Vector / SmartObject arrive in later phases.
 }
 
 /// One node in the layer tree.
@@ -45,6 +48,18 @@ impl Layer {
             id,
             name: name.into(),
             kind: LayerKind::Raster,
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+            tiles: HashMap::new(),
+        }
+    }
+
+    pub fn adjustment(id: LayerId, name: impl Into<String>, adj: Adjustment) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: LayerKind::Adjustment(adj),
             blend: BlendMode::Normal,
             opacity: 1.0,
             visible: true,
@@ -87,6 +102,13 @@ impl LayerTree {
     pub fn add_raster(&mut self, name: impl Into<String>) -> LayerId {
         let id = self.alloc_id();
         self.layers.push(Layer::raster(id, name));
+        id
+    }
+
+    /// Push a new adjustment layer on top and return its id.
+    pub fn add_adjustment(&mut self, adj: Adjustment) -> LayerId {
+        let id = self.alloc_id();
+        self.layers.push(Layer::adjustment(id, adj.name(), adj));
         id
     }
 
