@@ -135,12 +135,14 @@ pigment/
 - [ ] `TileCache`: GPU atlas + indirection/page table; LRU residency; RAM spill
 - [x] Eraser (destination-out dab pipeline)
 - [x] CommandStack: undo/redo (Cmd+Z / Cmd+Shift+Z + Edit menu) via GPU-side `copy_texture_to_texture` layer snapshots, depth-capped
+- [x] Bucket fill (CPU flood fill, `pigment_core::fill`) + eyedropper (1px GPU readback)
+- [x] Layer delete / reorder (▲▼) / inline rename
+- [x] `.pigment` doc format: lz4-compressed RGBA16F layer blobs + JSON metadata (`pigment_io::document_file`); save via GPU readback, open via staged upload
+- [x] **DoD met:** multi-layer painting with blend modes, undo, save & reopen
 - [ ] Wet-layer separation (in-progress stroke buffer) + pressure (tablet via `octotablet`)
 - [ ] Dirty-tile invalidation (currently recomposite every frame)
-- [ ] Bucket fill, eyedropper; layer delete/reorder/rename
-- [ ] History panel; tile-COW snapshots (replace full-layer; readback pattern ready)
-- [ ] `.pigment` doc format: serialize layer tree + tiles (lz4), load back
-- [ ] **DoD:** multi-layer painting with blend modes, undo, save/reopen
+- [ ] Tile model + `TileCache` (replace full-canvas layer textures); tile-COW undo
+- [ ] History panel; "sample all layers" for fill/eyedropper
 
 ### Phase 2 — Selection & transform
 - [ ] Selection mask as `R16F` GPU texture; marching-ants overlay

@@ -69,6 +69,24 @@ All compositor passes are recorded into egui's own `CommandEncoder` in
 Known shortcuts to revisit: recomposite-every-frame (no dirty tracking), no
 wet-layer/pressure, no undo yet, no tile streaming. See PLAN.md §4 Phase 1.
 
+### Save / load + CPU tools (added)
+- **GPU access from the app** — `with_gpu(frame, |gpu, device, queue| …)` reaches
+  the `CanvasGpu` callback resource + device/queue via `frame.wgpu_render_state()`,
+  so the app can read back / upload textures outside the paint callback.
+- **`.pigment`** (`pigment_io::document_file`) — `b"PIGMENT1"` magic + JSON
+  `DocMeta` + per-layer lz4 RGBA16F blobs. Save = `read_layer` (copy_texture_to_buffer,
+  256-aligned rows, mapped readback) per layer. Open = rebuild `LayerTree` from
+  meta, stage pixels in `PendingUpload`, upload next frame.
+- **Bucket fill** (`pigment_core::fill::flood_fill_mask`) — readback active layer →
+  f32 → 4-connected (or global) flood vs seed within tolerance → write fill color →
+  re-upload. Snapshots first (`begin_command_now`) for undo.
+- **Eyedropper** — 1×1 `read_pixel`, unpremultiply, linear→sRGB.
+- **Layers** — add / delete / reorder (vec swap) / inline rename; delete frees the
+  GPU layer (`drop_layer`).
+
+Both fill and eyedropper currently sample the **active layer only** (no
+sample-all-layers yet).
+
 ## Next
-Tile model + dirty-tile invalidation, undo (readback snapshot pattern verified),
-eraser/fill/eyedropper, `.pigment` save/load.
+Tile model + `TileCache` (replace full-canvas layer textures) + dirty-tile
+invalidation; wet-layer + pen pressure; History panel.

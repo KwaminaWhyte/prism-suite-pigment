@@ -5,7 +5,6 @@
 //! currently one canvas-sized texture each (a degenerate single tile).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use eframe::egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use eframe::wgpu;
@@ -160,7 +159,6 @@ pub struct CanvasGpu {
     canvas_size: Size,
     ping: Option<GpuLayer>,
     pong: Option<GpuLayer>,
-    image_gen: Option<u64>,
 }
 
 impl CanvasGpu {
@@ -332,11 +330,12 @@ impl CanvasGpu {
             canvas_size: Size::new(1, 1),
             ping: None,
             pong: None,
-            image_gen: None,
         }
     }
 
-    fn ensure_canvas(&mut self, device: &wgpu::Device, size: Size) {
+    /// (Re)create the canvas targets when the document size changes. Clears
+    /// layers + history (new document).
+    pub fn ensure_canvas(&mut self, device: &wgpu::Device, size: Size) {
         if self.canvas_size == size && self.ping.is_some() {
             return;
         }
@@ -346,20 +345,21 @@ impl CanvasGpu {
         self.layers.clear(); // new document
         self.undo_stack.clear();
         self.redo_stack.clear();
-        self.image_gen = None;
     }
 
-    fn ensure_layer(&mut self, device: &wgpu::Device, id: LayerId) {
+    pub fn ensure_layer(&mut self, device: &wgpu::Device, id: LayerId) {
         let size = self.canvas_size;
         self.layers
             .entry(id)
             .or_insert_with(|| make_target(device, size, "layer"));
     }
 
-    fn upload_image(&mut self, queue: &wgpu::Queue, id: LayerId, gen: u64, f16: &[half::f16]) {
-        if self.image_gen == Some(gen) {
-            return;
-        }
+    pub fn drop_layer(&mut self, id: LayerId) {
+        self.layers.remove(&id);
+    }
+
+    /// Upload raw RGBA16F (linear premultiplied) bytes into a layer.
+    pub fn upload_layer(&mut self, queue: &wgpu::Queue, id: LayerId, bytes: &[u8]) {
         let Some(layer) = self.layers.get(&id) else { return };
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -368,7 +368,7 @@ impl CanvasGpu {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(f16),
+            bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(self.canvas_size.width * 4 * 2),
@@ -380,7 +380,109 @@ impl CanvasGpu {
                 depth_or_array_layers: 1,
             },
         );
-        self.image_gen = Some(gen);
+    }
+
+    /// Read a whole layer back to CPU as tightly-packed RGBA16F bytes.
+    pub fn read_layer(&self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId) -> Option<Vec<u8>> {
+        let layer = self.layers.get(&id)?;
+        let (w, h) = (self.canvas_size.width, self.canvas_size.height);
+        let unpadded = w * 8; // 4ch * f16
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = unpadded.div_ceil(align) * align;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: (padded * h) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &layer.tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .ok()?;
+        let data = slice.get_mapped_range();
+        let mut out = Vec::with_capacity((unpadded * h) as usize);
+        for row in 0..h {
+            let s = (row * padded) as usize;
+            out.extend_from_slice(&data[s..s + unpadded as usize]);
+        }
+        drop(data);
+        buf.unmap();
+        Some(out)
+    }
+
+    /// Read a single pixel (linear premultiplied RGBA) — for the eyedropper.
+    pub fn read_pixel(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        x: u32,
+        y: u32,
+    ) -> Option<[f32; 4]> {
+        let layer = self.layers.get(&id)?;
+        if x >= self.canvas_size.width || y >= self.canvas_size.height {
+            return None;
+        }
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readpixel"),
+            size: 256,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &layer.tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .ok()?;
+        let data = slice.get_mapped_range();
+        let px = [
+            half::f16::from_le_bytes([data[0], data[1]]).to_f32(),
+            half::f16::from_le_bytes([data[2], data[3]]).to_f32(),
+            half::f16::from_le_bytes([data[4], data[5]]).to_f32(),
+            half::f16::from_le_bytes([data[6], data[7]]).to_f32(),
+        ];
+        drop(data);
+        buf.unmap();
+        Some(px)
     }
 
     /// Copy a layer's pixels into a fresh GPU texture (one undo unit).
@@ -407,6 +509,20 @@ impl CanvasGpu {
     /// Push the active layer's current pixels onto the undo stack (stroke start).
     pub fn begin_command(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, id: LayerId) {
         if let Some(snap) = self.snapshot_of(device, encoder, id) {
+            self.undo_stack.push(snap);
+            if self.undo_stack.len() > UNDO_MAX {
+                self.undo_stack.remove(0);
+            }
+            self.redo_stack.clear();
+        }
+    }
+
+    /// Snapshot the active layer using a self-contained encoder (for callers
+    /// outside the frame callback, e.g. bucket fill).
+    pub fn begin_command_now(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId) {
+        let mut enc = device.create_command_encoder(&Default::default());
+        if let Some(snap) = self.snapshot_of(device, &mut enc, id) {
+            queue.submit([enc.finish()]);
             self.undo_stack.push(snap);
             if self.undo_stack.len() > UNDO_MAX {
                 self.undo_stack.remove(0);
@@ -709,8 +825,6 @@ pub struct CanvasPaint {
     pub doc_rect: egui::Rect,
     pub checker_pts: f32,
     pub canvas_size: Size,
-    /// (generation, background layer id, linear-premultiplied f16 pixels).
-    pub image: Option<(u64, LayerId, Arc<Vec<half::f16>>)>,
     pub layers: Vec<LayerDraw>,
     pub active_id: LayerId,
     pub dabs: Vec<Dab>,
@@ -735,10 +849,6 @@ impl CallbackTrait for CanvasPaint {
         gpu.ensure_canvas(device, self.canvas_size);
         for l in &self.layers {
             gpu.ensure_layer(device, l.id);
-        }
-        if let Some((gen, bg_id, f16)) = &self.image {
-            gpu.ensure_layer(device, *bg_id);
-            gpu.upload_image(queue, *bg_id, *gen, f16);
         }
 
         if self.undo {

@@ -4,6 +4,8 @@
 //! app can upload to a GPU texture. PSD/EXR/ICC and `.pigment` save/load follow
 //! in later phases (PLAN.md §4).
 
+pub mod document_file;
+
 use std::path::Path;
 
 use pigment_core::Size;

@@ -8,6 +8,7 @@
 pub mod blend;
 pub mod color;
 pub mod document;
+pub mod fill;
 pub mod geometry;
 pub mod layer;
 pub mod tile;

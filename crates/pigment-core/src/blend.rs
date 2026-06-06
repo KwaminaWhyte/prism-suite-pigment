@@ -40,6 +40,30 @@ impl BlendMode {
         self as u32
     }
 
+    /// Inverse of [`shader_id`]; unknown ids fall back to `Normal`.
+    pub fn from_shader_id(id: u32) -> BlendMode {
+        match id {
+            1 => BlendMode::Multiply,
+            2 => BlendMode::Screen,
+            3 => BlendMode::Overlay,
+            4 => BlendMode::Darken,
+            5 => BlendMode::Lighten,
+            6 => BlendMode::ColorDodge,
+            7 => BlendMode::ColorBurn,
+            8 => BlendMode::HardLight,
+            9 => BlendMode::SoftLight,
+            10 => BlendMode::Difference,
+            11 => BlendMode::Exclusion,
+            12 => BlendMode::LinearDodge,
+            13 => BlendMode::LinearBurn,
+            20 => BlendMode::Hue,
+            21 => BlendMode::Saturation,
+            22 => BlendMode::Color,
+            23 => BlendMode::Luminosity,
+            _ => BlendMode::Normal,
+        }
+    }
+
     /// True if expressible by fixed-function `wgpu::BlendState` (no backdrop
     /// read needed) — the fast path. Everything else runs the switch shader.
     pub fn is_fixed_function(self) -> bool {
