@@ -163,7 +163,7 @@ Editing" (SIGGRAPH 2003) · docs.opencv.org (photo: seamlessClone) · Barnes et 
   the selection mask) and **spot channels** for print. Store as extra mask layers in `prism-core`
   (app-agnostic). Split/merge channels = trivial reshuffle.
 
-Sources: helpx.adobe.com/photoshop (layer effects, smart objects, advanced blending) · w3.org/TR/compositing-1 · ../SUITE.md (render-graph node = Dynamic Link / smart object)
+Sources: helpx.adobe.com/photoshop (layer effects, smart objects, advanced blending) · w3.org/TR/compositing-1 · [SUITE.md](https://github.com/KwaminaWhyte/prism-suite-prism/blob/main/SUITE.md) (render-graph node = Dynamic Link / smart object)
 
 ## 8. Filters, blur galleries, distortion, lens correction
 
@@ -258,4 +258,4 @@ github.com/JingyunLiang/SwinIR · arxiv.org/abs/2503.14757 (real-time HR inpaint
   `.asl` styles, `.aco` swatches, `.csh` shapes, `.cube`/`.3dl` LUTs), native format otherwise.
 
 Sources: rhai.rs · github.com/boa-dev/boa · github.com/denoland/deno_core · openfx.readthedocs.io ·
-helpx.adobe.com/photoshop (actions, scripting, batch, presets) · ../SUITE.md (shared asset library, prism-fx)
+helpx.adobe.com/photoshop (actions, scripting, batch, presets) · [SUITE.md](https://github.com/KwaminaWhyte/prism-suite-prism/blob/main/SUITE.md) (shared asset library, prism-fx)
