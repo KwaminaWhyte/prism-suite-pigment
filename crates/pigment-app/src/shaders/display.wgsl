@@ -6,6 +6,10 @@ struct Display {
     clip_min: vec2<f32>,
     clip_max: vec2<f32>,
     checker_px: f32,
+    has_selection: f32,
+    time: f32,
+    canvas_w: f32,
+    canvas_h: f32,
     _p0: f32,
     _p1: f32,
     _p2: f32,
@@ -14,6 +18,7 @@ struct Display {
 @group(0) @binding(0) var<uniform> d: Display;
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var composite: texture_2d<f32>;
+@group(0) @binding(3) var selection: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -54,5 +59,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let bg = vec3<f32>(g, g, g);
 
     let over = c.rgb + bg * (1.0 - c.a); // premultiplied over opaque bg
-    return vec4<f32>(linear_to_srgb(over), 1.0);
+    var rgb = linear_to_srgb(over);
+
+    // Marching ants: detect selection-mask boundary, draw animated dashes.
+    if d.has_selection > 0.5 {
+        let tx = vec2<f32>(1.0 / max(d.canvas_w, 1.0), 1.0 / max(d.canvas_h, 1.0));
+        let m = textureSample(selection, samp, in.uv).r;
+        let mx = textureSample(selection, samp, in.uv + vec2<f32>(tx.x, 0.0)).r;
+        let my = textureSample(selection, samp, in.uv + vec2<f32>(0.0, tx.y)).r;
+        let edge = max(abs(m - mx), abs(m - my));
+        if edge > 0.3 {
+            // Dash pattern marching along the boundary in screen space.
+            let phase = fract((in.pos.x + in.pos.y) * 0.12 - d.time * 4.0);
+            let ant = select(0.0, 1.0, phase < 0.5);
+            rgb = vec3<f32>(ant, ant, ant);
+        }
+    }
+    return vec4<f32>(rgb, 1.0);
 }

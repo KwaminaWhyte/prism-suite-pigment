@@ -10,7 +10,7 @@ use pigment_core::{BlendMode, Document, Layer, LayerId, Size};
 use pigment_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
 use pigment_io::LoadedImage;
 
-use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, ViewTransform};
+use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTransform};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
@@ -19,6 +19,8 @@ enum Tool {
     Eraser,
     Fill,
     Eyedropper,
+    SelectRect,
+    SelectEllipse,
 }
 
 /// Layers + pixels staged for GPU upload on the next frame.
@@ -107,6 +109,11 @@ pub struct PigmentApp {
     // Compositing dirty tracking.
     force_composite: bool,
     last_fingerprint: u64,
+
+    // Selection.
+    sel_drag_start: Option<egui::Vec2>,
+    sel_op_pending: Option<SelectionOp>,
+    selection_active: bool,
 }
 
 impl PigmentApp {
@@ -149,6 +156,9 @@ impl PigmentApp {
             redo_count: 0,
             force_composite: true,
             last_fingerprint: 0,
+            sel_drag_start: None,
+            sel_op_pending: None,
+            selection_active: false,
         }
     }
 
@@ -451,6 +461,23 @@ impl eframe::App for PigmentApp {
                         ui.close_menu();
                     }
                 });
+                ui.menu_button("Select", |ui| {
+                    if ui.button("All").clicked() {
+                        self.sel_op_pending = Some(SelectionOp::All);
+                        self.selection_active = false;
+                        ui.close_menu();
+                    }
+                    if ui.button("None").clicked() {
+                        self.sel_op_pending = Some(SelectionOp::None);
+                        self.selection_active = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("Invert").clicked() {
+                        self.sel_op_pending = Some(SelectionOp::Invert);
+                        self.selection_active = true;
+                        ui.close_menu();
+                    }
+                });
                 ui.menu_button("View", |ui| {
                     if ui.button("Fit to screen").clicked() {
                         self.needs_fit = true;
@@ -474,6 +501,8 @@ impl eframe::App for PigmentApp {
                 (Tool::Eraser, "Erase"),
                 (Tool::Fill, "Fill"),
                 (Tool::Eyedropper, "Pick"),
+                (Tool::SelectRect, "Rect"),
+                (Tool::SelectEllipse, "Oval"),
             ] {
                 if ui
                     .add_sized([56.0, 24.0], egui::SelectableLabel::new(self.tool == tool, label))
@@ -746,6 +775,32 @@ impl eframe::App for PigmentApp {
                             }
                         }
                     }
+                    Tool::SelectRect | Tool::SelectEllipse => {
+                        let ellipse = self.tool == Tool::SelectEllipse;
+                        if response.drag_started() {
+                            if let Some(p) = response.interact_pointer_pos() {
+                                self.sel_drag_start = Some(screen_to_doc(p, doc_rect, self.doc.size));
+                            }
+                        }
+                        if response.dragged() {
+                            if let (Some(start), Some(p)) =
+                                (self.sel_drag_start, response.interact_pointer_pos())
+                            {
+                                let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                                let x = start.x.min(cur.x);
+                                let y = start.y.min(cur.y);
+                                let w = (start.x - cur.x).abs();
+                                let h = (start.y - cur.y).abs();
+                                self.sel_op_pending =
+                                    Some(SelectionOp::Marquee { rect: [x, y, w, h], ellipse });
+                                self.selection_active = true;
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped() {
+                            self.sel_drag_start = None;
+                        }
+                    }
                 }
 
                 let layers = self.layer_order();
@@ -762,6 +817,12 @@ impl eframe::App for PigmentApp {
                     || fp != self.last_fingerprint;
                 self.last_fingerprint = fp;
                 self.force_composite = false;
+
+                // Keep marching ants animating while a selection is active.
+                if self.selection_active {
+                    ui.ctx().request_repaint();
+                }
+                let time = ui.input(|i| i.time) as f32;
 
                 ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                     rect,
@@ -784,6 +845,8 @@ impl eframe::App for PigmentApp {
                         wet_opacity: self.brush_opacity,
                         paint_into_wet: self.wet_active,
                         dirty,
+                        selection_op: self.sel_op_pending.take(),
+                        time,
                     },
                 ));
             });

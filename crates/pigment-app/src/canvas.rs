@@ -29,6 +29,16 @@ pub struct LayerDraw {
     pub visible: bool,
 }
 
+/// A selection operation requested by the app for this frame.
+#[derive(Clone, Copy)]
+pub enum SelectionOp {
+    /// Replace the selection with a rectangle/ellipse marquee (doc px).
+    Marquee { rect: [f32; 4], ellipse: bool },
+    All,
+    None,
+    Invert,
+}
+
 /// Pan/zoom state for the viewport.
 #[derive(Clone, Copy, Debug)]
 pub struct ViewTransform {
@@ -57,7 +67,20 @@ struct DisplayUniform {
     clip_min: [f32; 2],
     clip_max: [f32; 2],
     checker_px: f32,
+    has_selection: f32,
+    time: f32,
+    canvas_w: f32,
+    canvas_h: f32,
     _pad: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ShapeUniform {
+    rect: [f32; 4],
+    size: [f32; 2],
+    kind: u32,
+    _p: u32,
 }
 
 #[repr(C)]
@@ -72,7 +95,8 @@ struct CompositeParams {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct LayerInfo {
     size: [f32; 2],
-    _pad: [f32; 2],
+    has_selection: f32,
+    _pad: f32,
 }
 
 struct GpuLayer {
@@ -91,6 +115,7 @@ struct Snapshot {
 }
 
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const SEL_FMT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 const MAX_LAYERS: u64 = 64;
 const PARAMS_STRIDE: u64 = 256; // min uniform dynamic-offset alignment
 const UNDO_MAX: usize = 32;
@@ -112,6 +137,10 @@ const ERASE_BLEND: wgpu::BlendState = wgpu::BlendState {
 };
 
 fn make_target(device: &wgpu::Device, size: Size, label: &str) -> GpuLayer {
+    make_target_fmt(device, size, label, FMT)
+}
+
+fn make_target_fmt(device: &wgpu::Device, size: Size, label: &str, format: wgpu::TextureFormat) -> GpuLayer {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
@@ -122,7 +151,7 @@ fn make_target(device: &wgpu::Device, size: Size, label: &str) -> GpuLayer {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: FMT,
+        format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC
@@ -181,6 +210,16 @@ pub struct CanvasGpu {
     // invalidation needs the tile model (deferred).
     last_final_is_ping: bool,
     composite_valid: bool,
+
+    // Selection (R16Float mask; 1 = selected). Marquee + invert pipelines.
+    selection: Option<GpuLayer>,
+    selection_tmp: Option<GpuLayer>,
+    has_selection: bool,
+    shape_pipeline: wgpu::RenderPipeline,
+    shape_bgl: wgpu::BindGroupLayout,
+    shape_uniform: wgpu::Buffer,
+    invert_pipeline: wgpu::RenderPipeline,
+    invert_bgl: wgpu::BindGroupLayout,
 }
 
 impl CanvasGpu {
@@ -231,6 +270,7 @@ impl CanvasGpu {
             device,
             "composite",
             &composite_mod,
+            "fs_main",
             &[&composite_bgl],
             &[],
             FMT,
@@ -246,16 +286,20 @@ impl CanvasGpu {
         // --- Dab pipeline ---
         let dab_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("dab.bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                sampler_entry(1),
+                tex_entry(2),
+            ],
         });
         const DAB_ATTRS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
             0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32x4
@@ -269,6 +313,7 @@ impl CanvasGpu {
             device,
             "dab",
             &dab_mod,
+            "fs_main",
             &[&dab_bgl],
             std::slice::from_ref(&dab_layout),
             FMT,
@@ -278,6 +323,7 @@ impl CanvasGpu {
             device,
             "dab.erase",
             &dab_mod,
+            "fs_main",
             &[&dab_bgl],
             std::slice::from_ref(&dab_layout),
             FMT,
@@ -313,17 +359,68 @@ impl CanvasGpu {
                 },
                 sampler_entry(1),
                 tex_entry(2),
+                tex_entry(3),
             ],
         });
         let display_pipeline = make_render_pipeline(
             device,
             "display",
             &display_mod,
+            "fs_main",
             &[&display_bgl],
             &[],
             target_format,
             None,
         );
+
+        // --- Selection pipelines ---
+        let selection_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("selection.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/selection.wgsl").into()),
+        });
+        let shape_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sel.shape.bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let shape_pipeline = make_render_pipeline(
+            device,
+            "sel.shape",
+            &selection_mod,
+            "fs_shape",
+            &[&shape_bgl],
+            &[],
+            SEL_FMT,
+            None,
+        );
+        let invert_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sel.invert.bgl"),
+            entries: &[sampler_entry(1), tex_entry(2)],
+        });
+        let invert_pipeline = make_render_pipeline(
+            device,
+            "sel.invert",
+            &selection_mod,
+            "fs_invert",
+            &[&invert_bgl],
+            &[],
+            SEL_FMT,
+            None,
+        );
+        let shape_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sel.shape.uniform"),
+            size: std::mem::size_of::<ShapeUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let display_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("display.uniform"),
             size: std::mem::size_of::<DisplayUniform>() as u64,
@@ -360,6 +457,14 @@ impl CanvasGpu {
             wet_opacity: 1.0,
             last_final_is_ping: true,
             composite_valid: false,
+            selection: None,
+            selection_tmp: None,
+            has_selection: false,
+            shape_pipeline,
+            shape_bgl,
+            shape_uniform,
+            invert_pipeline,
+            invert_bgl,
         }
     }
 
@@ -374,6 +479,9 @@ impl CanvasGpu {
         self.pong = Some(make_target(device, size, "composite.pong"));
         self.wet = Some(make_target(device, size, "composite.wet"));
         self.wet_owner = None;
+        self.selection = Some(make_target_fmt(device, size, "selection", SEL_FMT));
+        self.selection_tmp = Some(make_target_fmt(device, size, "selection.tmp", SEL_FMT));
+        self.has_selection = false;
         self.composite_valid = false;
         self.stroke_owner = None;
         self.stroke_pre = None;
@@ -645,6 +753,108 @@ impl CanvasGpu {
         self.restore(device, encoder, false);
     }
 
+    pub fn has_selection(&self) -> bool {
+        self.has_selection
+    }
+
+    /// Apply a selection operation (records into `encoder`).
+    pub fn apply_selection(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        op: &SelectionOp,
+    ) {
+        match *op {
+            SelectionOp::All => self.has_selection = false,
+            SelectionOp::None => {
+                if let Some(sel) = self.selection.as_ref() {
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("sel.none"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &sel.view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+                self.has_selection = true;
+            }
+            SelectionOp::Marquee { rect, ellipse } => {
+                let Some(sel) = self.selection.as_ref() else { return };
+                let uni = ShapeUniform {
+                    rect,
+                    size: [self.canvas_size.width as f32, self.canvas_size.height as f32],
+                    kind: if ellipse { 1 } else { 0 },
+                    _p: 0,
+                };
+                queue.write_buffer(&self.shape_uniform, 0, bytemuck::bytes_of(&uni));
+                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("sel.shape.bg"),
+                    layout: &self.shape_bgl,
+                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: self.shape_uniform.as_entire_binding() }],
+                });
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("sel.shape.pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &sel.view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.shape_pipeline);
+                pass.set_bind_group(0, &bind, &[]);
+                pass.draw(0..3, 0..1);
+                drop(pass);
+                self.has_selection = true;
+            }
+            SelectionOp::Invert => {
+                let (Some(sel), Some(tmp)) = (self.selection.as_ref(), self.selection_tmp.as_ref()) else { return };
+                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("sel.invert.bg"),
+                    layout: &self.invert_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&sel.view) },
+                    ],
+                });
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("sel.invert.pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &tmp.view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&self.invert_pipeline);
+                    pass.set_bind_group(0, &bind, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+                copy_tex(encoder, &tmp.tex, &sel.tex, self.canvas_size);
+                self.has_selection = true;
+            }
+        }
+    }
+
     /// Begin a wet brush stroke over `owner`: clear the wet buffer.
     pub fn wet_begin(&mut self, encoder: &mut wgpu::CommandEncoder, owner: LayerId, opacity: f32) {
         self.wet_owner = Some(owner);
@@ -740,22 +950,25 @@ impl CanvasGpu {
                 mapped_at_creation: false,
             });
         }
+        let Some(sel) = self.selection.as_ref() else { return };
         queue.write_buffer(&self.dab_instances, 0, bytemuck::cast_slice(dabs));
         queue.write_buffer(
             &self.dab_info_buf,
             0,
             bytemuck::bytes_of(&LayerInfo {
                 size: [self.canvas_size.width as f32, self.canvas_size.height as f32],
-                _pad: [0.0; 2],
+                has_selection: if self.has_selection { 1.0 } else { 0.0 },
+                _pad: 0.0,
             }),
         );
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("dab.bg"),
             layout: &self.dab_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.dab_info_buf.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.dab_info_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&sel.view) },
+            ],
         });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -870,6 +1083,7 @@ impl CanvasGpu {
         } else {
             &self.pong.as_ref().unwrap().view
         };
+        let sel_view = &self.selection.as_ref().unwrap().view;
         self.display_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("display.bg"),
             layout: &self.display_bgl,
@@ -877,6 +1091,7 @@ impl CanvasGpu {
                 wgpu::BindGroupEntry { binding: 0, resource: self.display_uniform.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(final_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(sel_view) },
             ],
         }));
     }
@@ -971,6 +1186,7 @@ fn make_render_pipeline(
     device: &wgpu::Device,
     label: &str,
     module: &wgpu::ShaderModule,
+    fs_entry: &str,
     bind_group_layouts: &[&wgpu::BindGroupLayout],
     vertex_buffers: &[wgpu::VertexBufferLayout],
     format: wgpu::TextureFormat,
@@ -993,7 +1209,7 @@ fn make_render_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fs_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
                 blend,
@@ -1036,6 +1252,10 @@ pub struct CanvasPaint {
     pub paint_into_wet: bool,
     /// Whether the document changed this frame (gates recompositing).
     pub dirty: bool,
+    /// Selection operation to apply this frame, if any.
+    pub selection_op: Option<SelectionOp>,
+    /// Seconds, for marching-ants animation.
+    pub time: f32,
 }
 
 impl CallbackTrait for CanvasPaint {
@@ -1059,6 +1279,9 @@ impl CallbackTrait for CanvasPaint {
         }
         for _ in 0..self.redo {
             gpu.redo(device, encoder);
+        }
+        if let Some(op) = &self.selection_op {
+            gpu.apply_selection(device, queue, encoder, op);
         }
         if self.begin_command {
             gpu.begin_command(device, encoder, self.active_id, &self.command_label);
@@ -1094,6 +1317,10 @@ impl CallbackTrait for CanvasPaint {
             clip_min: to_clip(self.doc_rect.min),
             clip_max: to_clip(self.doc_rect.max),
             checker_px: self.checker_pts * ppp,
+            has_selection: if gpu.has_selection() { 1.0 } else { 0.0 },
+            time: self.time,
+            canvas_w: self.canvas_size.width as f32,
+            canvas_h: self.canvas_size.height as f32,
             _pad: [0.0; 3],
         };
         queue.write_buffer(&gpu.display_uniform, 0, bytemuck::bytes_of(&uni));
@@ -1181,5 +1408,40 @@ mod gpu_tests {
         let p = gpu.composite_now(&device, &queue, &order);
         let near = gpu.read_composite_pixel(&device, &queue, p, 2, 2).unwrap();
         assert!(near[0] > 0.9 && near[2] < 0.1, "undo back to red: {near:?}");
+    }
+
+    // A rectangle selection must clip painting to the selected region.
+    #[test]
+    fn selection_clips_paint() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping selection_clips_paint");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+        gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
+        let order = vec![LayerDraw { id: l0, opacity: 1.0, blend: 0, visible: true }];
+
+        // Select the left half, then paint blue over the whole canvas.
+        let mut enc = device.create_command_encoder(&Default::default());
+        gpu.apply_selection(
+            &device,
+            &queue,
+            &mut enc,
+            &SelectionOp::Marquee { rect: [0.0, 0.0, 4.0, 8.0], ellipse: false },
+        );
+        let dab = Dab { center: [4.0, 4.0], radius: 16.0, hardness: 0.99, color: [0.0, 0.0, 1.0, 1.0] };
+        gpu.paint_dabs(&device, &queue, &mut enc, l0, &[dab], false, false);
+        queue.submit([enc.finish()]);
+        assert!(gpu.has_selection());
+
+        let p = gpu.composite_now(&device, &queue, &order);
+        let inside = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
+        let outside = gpu.read_composite_pixel(&device, &queue, p, 6, 4).unwrap();
+        assert!(inside[2] > 0.5, "selected area painted blue: {inside:?}");
+        assert!(outside[0] > 0.5 && outside[2] < 0.2, "unselected area untouched red: {outside:?}");
     }
 }
