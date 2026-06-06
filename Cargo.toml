@@ -19,9 +19,9 @@ log = "0.4"
 env_logger = "0.11"
 
 # Shared suite crates (promoted to prism/crates).
-prism-color = { path = "../crates/prism-color" }
-prism-core = { path = "../crates/prism-core" }
-prism-io = { path = "../crates/prism-io" }
+prism-color = { path = "../prism-suite-prism/crates/prism-color" }
+prism-core = { path = "../prism-suite-prism/crates/prism-core" }
+prism-io = { path = "../prism-suite-prism/crates/prism-io" }
 
 # Lints applied across the workspace (crates opt in via `[lints] workspace = true`).
 # These are deliberate: per-channel index loops read clearer than iterators, the
