@@ -152,7 +152,7 @@ Editing" (SIGGRAPH 2003) · docs.opencv.org (photo: seamlessClone) · Barnes et 
   is what composites; transforms/filters apply to the render, not the source, so they stay editable
   ("edit contents" reopens the child). This is exactly the suite's render-graph node model — a smart
   object is a graph node that evaluates a linked document on demand and caches its tiles (same
-  machinery as Dynamic Link in [../SUITE.md](../SUITE.md)). **Smart filters** = filters parented to a
+  machinery as Dynamic Link in [../SUITE.md](https://github.com/KwaminaWhyte/prism-suite-prism/blob/main/SUITE.md)). **Smart filters** = filters parented to a
   smart object's node, stored as params, re-evaluated on change, individually masked/toggled.
 - **Blend-If / advanced blending**: per-layer "this layer" + "underlying" gray (and per-channel)
   range sliders that gate the layer's contribution by luma/channel value, with a split-slider feathered
