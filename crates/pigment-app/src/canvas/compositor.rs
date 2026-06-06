@@ -170,6 +170,11 @@ impl CanvasGpu {
             if l.clipped && i > 0 {
                 p.has_clip = 1;
             }
+            if l.has_stroke {
+                p.has_stroke = 1;
+                p.stroke_color = l.stroke_color;
+                p.stroke_w = l.stroke_width;
+            }
             if self.xform_layer == Some(l.id) {
                 p.has_xform = 1;
                 p.m = self.xform_m;

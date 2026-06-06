@@ -45,6 +45,9 @@ fn compositor_brush_wet_undo() {
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
+        has_stroke: false,
+        stroke_color: [0.0; 4],
+        stroke_width: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
@@ -113,6 +116,9 @@ fn selection_clips_paint() {
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
+        has_stroke: false,
+        stroke_color: [0.0; 4],
+        stroke_width: 0.0,
     }];
 
     // Select the left half, then paint blue over the whole canvas.
@@ -204,6 +210,9 @@ fn adjustment_invert() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -215,6 +224,9 @@ fn adjustment_invert() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -259,6 +271,9 @@ fn curves_invert_master() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -270,6 +285,9 @@ fn curves_invert_master() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -358,6 +376,9 @@ fn posterize_adjustment() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -369,6 +390,9 @@ fn posterize_adjustment() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -409,6 +433,9 @@ fn blend_if_hides_bright_source() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -420,6 +447,9 @@ fn blend_if_hides_bright_source() {
             has_blend_if: true,
             blend_if: [0.0, 0.45, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -473,6 +503,9 @@ fn clipping_mask_gates_by_base_alpha() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -484,6 +517,9 @@ fn clipping_mask_gates_by_base_alpha() {
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: true,
+            has_stroke: false,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -553,6 +589,9 @@ fn channel_save_load_roundtrip() {
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
+        has_stroke: false,
+        stroke_color: [0.0; 4],
+        stroke_width: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
@@ -564,6 +603,64 @@ fn channel_save_load_roundtrip() {
     assert!(
         right[0] > 0.5 && right[2] < 0.2,
         "right half untouched red: {right:?}"
+    );
+}
+
+// Outer-stroke layer style: a small opaque square gets a red stroke ring just
+// outside its edge; far pixels stay empty, the interior stays white.
+#[test]
+fn layer_stroke_outlines_edge() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping layer_stroke_outlines_edge");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(16, 16);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    // 4x4 white opaque square at x6..10, y6..10; rest transparent.
+    let mut buf = Vec::new();
+    for y in 0..16 {
+        for x in 0..16 {
+            let px = if (6..10).contains(&x) && (6..10).contains(&y) {
+                [1.0, 1.0, 1.0, 1.0]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            };
+            for &c in &px {
+                buf.extend_from_slice(&half::f16::from_f32(c).to_le_bytes());
+            }
+        }
+    }
+    gpu.upload_layer(&queue, l0, &buf);
+
+    let order = vec![LayerDraw {
+        id: l0,
+        opacity: 1.0,
+        blend: 0,
+        visible: true,
+        adjust_kind: 0,
+        adjust: [0.0; 4],
+        has_blend_if: false,
+        blend_if: [0.0, 1.0, 0.0, 1.0],
+        clipped: false,
+        has_stroke: true,
+        stroke_color: [1.0, 0.0, 0.0, 1.0], // red
+        stroke_width: 2.0 / 16.0,           // ~2px in uv
+    }];
+    let pp = gpu.composite_now(&device, &queue, &order);
+    let edge = gpu.read_composite_pixel(&device, &queue, pp, 5, 8).unwrap(); // just left of square
+    let far = gpu.read_composite_pixel(&device, &queue, pp, 0, 0).unwrap();
+    let inside = gpu.read_composite_pixel(&device, &queue, pp, 7, 7).unwrap();
+    assert!(
+        edge[0] > 0.5 && edge[1] < 0.3 && edge[3] > 0.3,
+        "red stroke just outside the edge: {edge:?}"
+    );
+    assert!(far[3] < 0.1, "far pixel stays empty: {far:?}");
+    assert!(
+        inside[0] > 0.8 && inside[1] > 0.8,
+        "interior stays white: {inside:?}"
     );
 }
 
@@ -597,6 +694,9 @@ fn layer_mask_hides() {
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
+        has_stroke: false,
+        stroke_color: [0.0; 4],
+        stroke_width: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();

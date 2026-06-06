@@ -174,6 +174,12 @@ impl PigmentApp {
                 }
             }
             self.clipped_layers.contains(&l.id).hash(&mut h);
+            if let Some((c, w)) = self.layer_strokes.get(&l.id) {
+                for v in c {
+                    v.to_bits().hash(&mut h);
+                }
+                w.to_bits().hash(&mut h);
+            }
         }
         h.finish()
     }
@@ -193,6 +199,8 @@ impl PigmentApp {
                     _ => (0, [0.0; 4]),
                 };
                 let blend_if = self.blend_if.get(&l.id).copied();
+                let stroke = self.layer_strokes.get(&l.id);
+                let cw = self.doc.size.width.max(1) as f32;
                 LayerDraw {
                     id: l.id,
                     opacity: l.opacity,
@@ -203,6 +211,9 @@ impl PigmentApp {
                     has_blend_if: blend_if.is_some(),
                     blend_if: blend_if.unwrap_or([0.0, 1.0, 0.0, 1.0]),
                     clipped: self.clipped_layers.contains(&l.id),
+                    has_stroke: stroke.is_some(),
+                    stroke_color: stroke.map(|(c, _)| *c).unwrap_or([0.0; 4]),
+                    stroke_width: stroke.map(|(_, w)| *w / cw).unwrap_or(0.0),
                 }
             })
             .collect()

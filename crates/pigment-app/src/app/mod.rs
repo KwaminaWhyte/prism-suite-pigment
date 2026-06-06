@@ -186,6 +186,8 @@ pub struct PigmentApp {
     blend_if: HashMap<LayerId, [f32; 4]>,
     /// Layers clipped to the layer directly below (clipping mask).
     clipped_layers: HashSet<LayerId>,
+    /// Per-layer outer-stroke style: (straight rgba, width in doc px).
+    layer_strokes: HashMap<LayerId, ([f32; 4], f32)>,
 
     // Filters.
     filter_radius: f32,
@@ -284,6 +286,7 @@ impl PigmentApp {
             masked_layers: HashSet::new(),
             blend_if: HashMap::new(),
             clipped_layers: HashSet::new(),
+            layer_strokes: HashMap::new(),
             edit_mask: false,
             filter_radius: 4.0,
             filter_amount: 1.0,

@@ -372,6 +372,33 @@ impl eframe::App for PigmentApp {
                 });
 
                 ui.separator();
+                egui::CollapsingHeader::new("Layer style: Stroke").show(ui, |ui| {
+                    let id = self.active_id();
+                    let mut on = self.layer_strokes.contains_key(&id);
+                    if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                        if on {
+                            self.layer_strokes.insert(id, ([0.0, 0.0, 0.0, 1.0], 4.0));
+                        } else {
+                            self.layer_strokes.remove(&id);
+                        }
+                        self.force_composite = true;
+                    }
+                    if let Some((color, width)) = self.layer_strokes.get_mut(&id) {
+                        let mut rgb = [color[0], color[1], color[2]];
+                        if ui.color_edit_button_rgb(&mut rgb).changed() {
+                            *color = [rgb[0], rgb[1], rgb[2], color[3]];
+                            self.force_composite = true;
+                        }
+                        if ui
+                            .add(egui::Slider::new(width, 1.0..=40.0).text("width px"))
+                            .changed()
+                        {
+                            self.force_composite = true;
+                        }
+                    }
+                });
+
+                ui.separator();
                 egui::CollapsingHeader::new("Channels").show(ui, |ui| {
                     let names =
                         with_gpu(frame, |gpu, _, _| gpu.channel_names()).unwrap_or_default();

@@ -35,6 +35,10 @@ pub struct LayerDraw {
     pub blend_if: [f32; 4], // [this_black, this_white, under_black, under_white]
     /// Clip to the layer directly below (its alpha gates this layer).
     pub clipped: bool,
+    /// Outer-stroke layer style.
+    pub has_stroke: bool,
+    pub stroke_color: [f32; 4],
+    pub stroke_width: f32, // uv units
 }
 
 /// A selection operation requested by the app for this frame.
@@ -122,10 +126,13 @@ struct CompositeParams {
     _p1: [f32; 2],
     adjust: [f32; 4],
     has_blend_if: u32,
-    has_clip: u32, // clip this layer to the layer below's alpha
-    _p2: [u32; 2],
+    has_clip: u32,   // clip this layer to the layer below's alpha
+    has_stroke: u32, // outer-stroke layer style
+    stroke_w: f32,   // stroke half-width in uv units
     /// Blend-If luma ranges: [this_black, this_white, under_black, under_white].
     blend_if: [f32; 4],
+    /// Stroke color (straight, premultiplied at use): [r, g, b, a].
+    stroke_color: [f32; 4],
 }
 
 impl CompositeParams {
@@ -141,8 +148,10 @@ impl CompositeParams {
             adjust: [0.0; 4],
             has_blend_if: 0,
             has_clip: 0,
-            _p2: [0; 2],
+            has_stroke: 0,
+            stroke_w: 0.0,
             blend_if: [0.0, 1.0, 0.0, 1.0],
+            stroke_color: [0.0; 4],
         }
     }
 }

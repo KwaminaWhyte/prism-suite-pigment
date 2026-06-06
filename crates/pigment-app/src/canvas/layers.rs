@@ -118,8 +118,10 @@ impl CanvasGpu {
             adjust: [0.0; 4],
             has_blend_if: 0,
             has_clip: 0,
-            _p2: [0; 2],
+            has_stroke: 0,
+            stroke_w: 0.0,
             blend_if: [0.0, 1.0, 0.0, 1.0],
+            stroke_color: [0.0; 4],
         };
         queue.write_buffer(
             &self.params_buf,

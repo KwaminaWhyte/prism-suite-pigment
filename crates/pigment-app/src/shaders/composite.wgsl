@@ -13,9 +13,10 @@ struct Params {
     adjust: vec4<f32>, // adjustment params
     has_blend_if: u32,
     has_clip: u32,
-    _p2b: u32, // scalar pads (NOT vec3 — vec3 would force 16-byte align, mismatching Rust)
-    _p2c: u32,
+    has_stroke: u32,
+    stroke_w: f32, // outer-stroke half-width, uv units
     blend_if: vec4<f32>, // this_black, this_white, under_black, under_white
+    stroke_color: vec4<f32>, // straight rgba
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -235,6 +236,27 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         * (params.opacity * mask);
     if !in_bounds {
         s = vec4<f32>(0.0);
+    }
+
+    // Outer-stroke layer style: ring of the layer's alpha outside its own edge,
+    // tinted by stroke_color, drawn behind the layer (layer composites over it).
+    if params.has_stroke != 0u {
+        let own = textureSampleLevel(layer_tex, samp, clamp(luv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        var ring = 0.0;
+        for (var k = 0; k < 16; k = k + 1) {
+            let ang = 6.2831853 * f32(k) / 16.0;
+            let dir = vec2<f32>(cos(ang), sin(ang));
+            for (var rr = 0; rr < 3; rr = rr + 1) {
+                let r = params.stroke_w * (f32(rr) + 1.0) / 3.0;
+                let suv = clamp(luv + dir * r, vec2<f32>(0.0), vec2<f32>(1.0));
+                ring = max(ring, textureSampleLevel(layer_tex, samp, suv, 0.0).a);
+            }
+        }
+        let cov = clamp(ring - own, 0.0, 1.0) * (params.opacity * mask);
+        let sa_pre = params.stroke_color.a * cov;
+        let st = vec4<f32>(params.stroke_color.rgb * sa_pre, sa_pre); // premultiplied stroke
+        // Layer over stroke (stroke shows where the layer's own alpha is low).
+        s = vec4<f32>(s.rgb + st.rgb * (1.0 - s.a), s.a + st.a * (1.0 - s.a));
     }
 
     // Clipping mask: gate the source by the base (below) layer's alpha.

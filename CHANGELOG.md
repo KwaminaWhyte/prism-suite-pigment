@@ -7,6 +7,10 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Layer style: Stroke** (Phase 7). Non-destructive outer stroke — an alpha-edge
+  ring sampled live in the compositor shader, tinted and drawn behind the layer.
+  Per-layer color + width sliders; GPU pixel-tested. (First layer FX; the
+  alpha-neighborhood machinery generalizes to drop shadow / glow.)
 - **Channels panel** (Phase 7). Save the current selection as a named alpha channel,
   load a channel back into the selection, or delete it (Channels panel section).
   GPU round-trip-tested.
