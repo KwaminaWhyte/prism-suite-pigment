@@ -317,8 +317,8 @@ clear license surfacing; every tool degrades gracefully when models/GPU are abse
 - [ ] **Denoise / Sharpen (AI)** (S): learned NR for high-ISO RAW
 - [ ] **Colorize** B&W (S), **Neural-style** presets (S, optional)
 - [ ] **Face-aware Liquify** (M): landmark model drives Phase-6 Liquify sliders (eyes/nose/smile/face-width)
-- [ ] **Generative Fill / Expand** (L, optional + pluggable): local diffusion via `candle`/ONNX **or** a user-configured cloud endpoint (BYO key); prompt → fill selection / extend canvas; clearly optional, never required for core editing
-- [ ] Provider abstraction: a `pigment-ai` trait so local/cloud/none are swappable; cancellation + progress + VRAM guard
+- [ ] **Generative Fill / Expand** (L, **optional + pluggable** — suite AI policy): prompt → fill selection / extend canvas via a provider abstraction with **two interchangeable backends — local diffusion (`candle`/ONNX) AND a user-configured cloud endpoint (bring-your-own API key)** — plus "none". **Never required for core editing**; the app is fully functional with no AI backend configured. (Policy shared across the suite — see [../RESEARCH.md §5](../RESEARCH.md).)
+- [ ] Provider abstraction: a `prism-ai` trait so local / cloud / none are swappable at runtime; cancellation + progress + VRAM guard; model license surfaced on first fetch
 - [ ] Tests: deterministic mask IoU vs fixtures (seeded), graceful no-model path
 
 ### Phase 11 — Automation, extensibility & plugins  *(pro workflows)*
