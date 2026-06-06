@@ -1,10 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "crates/pigment-core",
-    "crates/pigment-io",
-    "crates/pigment-app",
-]
+members = ["crates/pigment-app"]
 
 [workspace.package]
 version = "0.0.1"
@@ -22,9 +18,10 @@ anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 
-# Internal crates
-pigment-core = { path = "crates/pigment-core" }
-pigment-io = { path = "crates/pigment-io" }
+# Shared suite crates (promoted to prism/crates).
+prism-color = { path = "../crates/prism-color" }
+prism-core = { path = "../crates/prism-core" }
+prism-io = { path = "../crates/prism-io" }
 
 # Lints applied across the workspace (crates opt in via `[lints] workspace = true`).
 # These are deliberate: per-channel index loops read clearer than iterators, the

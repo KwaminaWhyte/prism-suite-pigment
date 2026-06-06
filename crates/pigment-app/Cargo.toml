@@ -10,8 +10,8 @@ name = "pigment"
 path = "src/main.rs"
 
 [dependencies]
-pigment-core.workspace = true
-pigment-io.workspace = true
+prism-core.workspace = true
+prism-io.workspace = true
 glam.workspace = true
 bytemuck.workspace = true
 half = { version = "2", features = ["bytemuck"] }

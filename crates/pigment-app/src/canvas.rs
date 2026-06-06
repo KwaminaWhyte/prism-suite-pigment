@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use eframe::egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use eframe::wgpu;
-use pigment_core::{LayerId, Size};
+use prism_core::{LayerId, Size};
 
 /// One instanced brush dab, in document pixel space; color is straight linear.
 #[repr(C)]
@@ -2307,7 +2307,7 @@ mod gpu_tests {
         gpu.ensure_layer(&device, l1); // adjustment layer (no pixels needed)
         gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red
 
-        let (k, p) = pigment_core::adjust::Adjustment::Invert.encode();
+        let (k, p) = prism_core::adjust::Adjustment::Invert.encode();
         let order = vec![
             LayerDraw {
                 id: l0,

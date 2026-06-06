@@ -6,18 +6,18 @@ use std::collections::HashSet;
 use eframe::egui_wgpu;
 use eframe::wgpu;
 use half::f16;
-use pigment_core::adjust::Adjustment;
-use pigment_core::color::{linear_to_srgb, srgb_to_linear};
-use pigment_core::fill::flood_fill_mask;
-use pigment_core::histogram::{self, Histogram};
-use pigment_core::layer::{TextDef, VectorDef};
-use pigment_core::raster::{self, CombineMode};
-use pigment_core::shape::{self, ShapeKind};
-use pigment_core::{BlendMode, Document, Layer, LayerId, LayerKind, Size};
-use pigment_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
-use pigment_io::resize::{resize_rgba_f32, Quality};
-use pigment_io::text::{self, TextAlign};
-use pigment_io::LoadedImage;
+use prism_core::adjust::Adjustment;
+use prism_core::color::{linear_to_srgb, srgb_to_linear};
+use prism_core::fill::flood_fill_mask;
+use prism_core::histogram::{self, Histogram};
+use prism_core::layer::{TextDef, VectorDef};
+use prism_core::raster::{self, CombineMode};
+use prism_core::shape::{self, ShapeKind};
+use prism_core::{BlendMode, Document, Layer, LayerId, LayerKind, Size};
+use prism_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
+use prism_io::resize::{resize_rgba_f32, Quality};
+use prism_io::text::{self, TextAlign};
+use prism_io::LoadedImage;
 use std::collections::HashMap;
 
 use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTransform};
@@ -194,7 +194,7 @@ impl PigmentApp {
         crate::icons::install(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx);
 
-        let placeholder = pigment_io::placeholder(Size::new(1280, 800));
+        let placeholder = prism_io::placeholder(Size::new(1280, 800));
         let doc = Document::new(placeholder.size);
         let background_id = doc.layers.layers[0].id;
         let pending = Some(PendingUpload {
@@ -693,12 +693,12 @@ impl PigmentApp {
 
     fn open_image(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Images", pigment_io::SUPPORTED_EXTENSIONS)
+            .add_filter("Images", prism_io::SUPPORTED_EXTENSIONS)
             .pick_file()
         else {
             return;
         };
-        match pigment_io::load_image(&path) {
+        match prism_io::load_image(&path) {
             Ok(img) => {
                 self.doc = Document::new(img.size);
                 self.background_id = self.doc.layers.layers[0].id;
@@ -762,7 +762,7 @@ impl PigmentApp {
         else {
             return;
         };
-        let doc_psd = match pigment_io::psd_import::load_psd(&path) {
+        let doc_psd = match prism_io::psd_import::load_psd(&path) {
             Ok(d) => d,
             Err(e) => {
                 log::error!("open .psd failed: {e}");
@@ -809,7 +809,7 @@ impl PigmentApp {
         else {
             return;
         };
-        let (size, rgba) = match pigment_io::exr_io::load_exr(&path) {
+        let (size, rgba) = match prism_io::exr_io::load_exr(&path) {
             Ok(v) => v,
             Err(e) => {
                 log::error!("open .exr failed: {e}");
@@ -868,7 +868,7 @@ impl PigmentApp {
             rgba8.push(to8(px[2]));
             rgba8.push((a.clamp(0.0, 1.0) * 255.0).round() as u8);
         }
-        if let Err(e) = pigment_io::export::save_rgba8(&path, &rgba8, w, h) {
+        if let Err(e) = prism_io::export::save_rgba8(&path, &rgba8, w, h) {
             log::error!("export failed: {e}");
         }
     }
