@@ -1016,7 +1016,7 @@ impl eframe::App for PigmentApp {
                                 .selected_text(format!("{:?}", layer.blend))
                                 .width(120.0)
                                 .show_ui(ui, |ui| {
-                                    for mode in BlendMode::ALL_SEPARABLE {
+                                    for mode in BlendMode::ALL {
                                         ui.selectable_value(&mut layer.blend, mode, format!("{mode:?}"));
                                     }
                                 });

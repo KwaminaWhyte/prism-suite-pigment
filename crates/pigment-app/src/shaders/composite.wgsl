@@ -35,6 +35,26 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     return out;
 }
 
+fn lum(c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.3, 0.59, 0.11)); }
+
+fn clip_color(c: vec3<f32>) -> vec3<f32> {
+    let l = lum(c);
+    let n = min(c.r, min(c.g, c.b));
+    let x = max(c.r, max(c.g, c.b));
+    var col = c;
+    if n < 0.0 { col = l + (col - l) * (l / (l - n + 1e-6)); }
+    if x > 1.0 { col = l + (col - l) * ((1.0 - l) / (x - l + 1e-6)); }
+    return col;
+}
+fn set_lum(c: vec3<f32>, l: f32) -> vec3<f32> { return clip_color(c + (l - lum(c))); }
+fn sat(c: vec3<f32>) -> f32 { return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)); }
+fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
+    let mn = min(c.r, min(c.g, c.b));
+    let mx = max(c.r, max(c.g, c.b));
+    if mx > mn { return (c - mn) * (s / (mx - mn)); }
+    return vec3<f32>(0.0);
+}
+
 fn blend_fn(mode: u32, b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
     switch mode {
         case 1u: { return b * s; }                       // Multiply
@@ -46,7 +66,33 @@ fn blend_fn(mode: u32, b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
         }
         case 4u: { return min(b, s); }                   // Darken
         case 5u: { return max(b, s); }                   // Lighten
+        case 6u: {                                        // ColorDodge
+            return select(min(vec3<f32>(1.0), b / max(1.0 - s, vec3<f32>(1e-6))),
+                          vec3<f32>(1.0), s >= vec3<f32>(1.0));
+        }
+        case 7u: {                                        // ColorBurn
+            return select(1.0 - min(vec3<f32>(1.0), (1.0 - b) / max(s, vec3<f32>(1e-6))),
+                          vec3<f32>(0.0), s <= vec3<f32>(0.0));
+        }
+        case 8u: {                                        // HardLight
+            let lo = 2.0 * b * s;
+            let hi = 1.0 - 2.0 * (1.0 - b) * (1.0 - s);
+            return select(hi, lo, s <= vec3<f32>(0.5));
+        }
+        case 9u: {                                        // SoftLight
+            let d = select(sqrt(b), ((16.0 * b - 12.0) * b + 4.0) * b, b <= vec3<f32>(0.25));
+            let lo = b - (1.0 - 2.0 * s) * b * (1.0 - b);
+            let hi = b + (2.0 * s - 1.0) * (d - b);
+            return select(hi, lo, s <= vec3<f32>(0.5));
+        }
+        case 10u: { return abs(b - s); }                 // Difference
+        case 11u: { return b + s - 2.0 * b * s; }        // Exclusion
         case 12u: { return min(vec3<f32>(1.0), b + s); } // LinearDodge (Add)
+        case 13u: { return max(vec3<f32>(0.0), b + s - 1.0); } // LinearBurn
+        case 20u: { return set_lum(set_sat(s, sat(b)), lum(b)); } // Hue
+        case 21u: { return set_lum(set_sat(b, sat(s)), lum(b)); } // Saturation
+        case 22u: { return set_lum(s, lum(b)); }         // Color
+        case 23u: { return set_lum(b, lum(s)); }         // Luminosity
         default: { return s; }                           // Normal
     }
 }

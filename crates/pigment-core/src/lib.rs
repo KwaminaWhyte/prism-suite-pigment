@@ -7,9 +7,11 @@
 
 pub mod blend;
 pub mod color;
+pub mod curve;
 pub mod document;
 pub mod fill;
 pub mod geometry;
+pub mod histogram;
 pub mod layer;
 pub mod raster;
 pub mod tile;

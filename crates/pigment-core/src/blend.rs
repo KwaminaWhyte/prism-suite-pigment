@@ -70,6 +70,28 @@ impl BlendMode {
         matches!(self, BlendMode::Normal | BlendMode::Multiply | BlendMode::LinearDodge)
     }
 
+    /// Every blend mode, in menu order (separable then HSL).
+    pub const ALL: [BlendMode; 18] = [
+        BlendMode::Normal,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::Darken,
+        BlendMode::Lighten,
+        BlendMode::ColorDodge,
+        BlendMode::ColorBurn,
+        BlendMode::HardLight,
+        BlendMode::SoftLight,
+        BlendMode::Difference,
+        BlendMode::Exclusion,
+        BlendMode::LinearDodge,
+        BlendMode::LinearBurn,
+        BlendMode::Hue,
+        BlendMode::Saturation,
+        BlendMode::Color,
+        BlendMode::Luminosity,
+    ];
+
     pub const ALL_SEPARABLE: [BlendMode; 14] = [
         BlendMode::Normal,
         BlendMode::Multiply,
