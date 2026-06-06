@@ -104,7 +104,20 @@ sample-all-layers yet).
   pollster and pixel-asserts upload→composite→wet-brush→region-undo. Skips if no
   adapter.
 
-## Next: Phase 2 — selection & transform
-Selection mask (`R16F`) + marching ants; rect/ellipse/lasso/magic-wand; feather/
-grow/shrink; move + free transform (GPU resample); crop/canvas/image size
-(`fast_image_resize`); copy/paste. See PLAN.md §4 Phase 2.
+## Phase 2 complete — selection & transform
+- **Selection** — `R16F` mask; rect/ellipse marquee + lasso (`raster::polygon_mask`)
+  + magic wand (flood of composite). Feather/grow-shrink/invert/combine in
+  `pigment_core::raster`; modifiers (Shift/Alt) combine vs the op-start mask.
+  Marching ants animate in `display.wgsl` (mask-edge + time). Brush/eraser/fill
+  clip to the mask (`read_selection`/`upload_selection`).
+- **Transform** — per-layer uv affine in `composite.wgsl` (`CompositeParams.m/off`)
+  previews move/scale live; `bake_transform` resamples on release. Undo via the
+  region snapshot.
+- **Doc ops** — `rebuild_document` (readback→map→recreate→upload) powers image
+  resize (`pigment_io::resize`), canvas size, and crop-to-selection; flip H/V.
+- **Clipboard** — selection-masked f32; copy/cut/paste (Cmd+C/X/V) + layer-from-selection.
+- **UI** — `icons.rs` (egui-phosphor) icon toolbar + `theme.rs` modern dark style.
+
+## Next: Phase 3 — adjustments, masks, filters
+Adjustment layers (read backdrop), curves UI, layer masks, GPU filters (blur/
+sharpen/noise), layer styles, HSL blend modes, histogram. See PLAN.md §4 Phase 3.

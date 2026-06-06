@@ -145,14 +145,19 @@ pigment/
 - *GPU sparse-virtual-texture streaming* (atlas + page table + RAM/disk spill for docs > VRAM) → **Phase 5** "out-of-core huge docs". Layers are currently one full-canvas `Rgba16Float` texture each (degenerate single tile); dirty tracking is frame-level + region-COW. Streaming is a large self-contained perf subsystem that belongs with its Phase 5 sibling.
 - *Hardware stylus pressure/tilt* → platform-blocked: eframe/egui doesn't surface pen pressure and `octotablet` has no macOS backend. Velocity dynamics stand in; per-dab modulation is ready for a raw-winit/`octotablet` source.
 
-### Phase 2 — Selection & transform
-- [ ] Selection mask as `R16F` GPU texture; marching-ants overlay
-- [ ] Tools: rectangle, ellipse, lasso, polygon lasso, magic wand (flood by tolerance)
-- [ ] Feather, grow/shrink, invert, select-all/none, add/subtract/intersect modifiers
-- [ ] Move tool; free transform (scale/rotate/skew) with GPU resampling
-- [ ] Crop, canvas size, image size (resize via `fast_image_resize` Lanczos3/Bicubic)
-- [ ] Copy/cut/paste, layer-from-selection, clipboard interop
-- [ ] **DoD:** select region, transform, crop, resize with quality resampling
+### Phase 2 — Selection & transform  *(COMPLETE)*
+- [x] Selection mask as `R16F` GPU texture; animated marching-ants overlay (display shader)
+- [x] Tools: rectangle, ellipse, lasso (freehand polygon), magic wand (flood by tolerance)
+- [x] Feather, grow/shrink, invert, select-all/none, add/subtract/intersect modifiers (`pigment_core::raster`)
+- [x] Selection-aware brush/eraser/fill (dabs + fill clip to the mask)
+- [x] Move tool (translate) + Transform (translate + Shift-drag scale) via composite-time uv affine, baked on release
+- [x] Crop to selection; canvas size (no resample); image size (resample via `fast_image_resize`); flip layer H/V
+- [x] Copy/cut/paste (Cmd+C/X/V) + layer-from-selection; selection-masked clipboard
+- [x] UI polish: phosphor icon toolbar + modern dark theme
+- [x] Tests: core `raster` (10) + `resize` (4) + GPU selection-clip & transform-bake
+- [x] **DoD met:** select region, transform, crop, resize with quality resampling
+
+**Deferred (polish):** free-transform *rotation/skew* + interactive corner/rotate handles (current transform is translate + uniform scale via Shift-drag; the composite affine already supports rotation — only the handle UI + aspect-correct rotation math remain). Modifier preview during marquee uses replace-then-combine.
 
 ### Phase 3 — Adjustments, masks, filters  *(real photo editing)*
 - [ ] Adjustment layers (read backdrop, transform): Levels, Curves, Brightness/Contrast, Hue/Sat, Color Balance, Exposure, Black&White, Invert, Threshold
