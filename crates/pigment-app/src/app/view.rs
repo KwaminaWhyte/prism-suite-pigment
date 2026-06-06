@@ -193,6 +193,82 @@ impl eframe::App for PigmentApp {
             });
         });
 
+        // Contextual tool-options bar (Affinity-style): per-tool controls live
+        // here, under the menu, instead of cluttering the right properties panel.
+        egui::TopBottomPanel::top("tool_options").show_inside(root, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let brushy = matches!(
+                    self.tool,
+                    Tool::Brush
+                        | Tool::Eraser
+                        | Tool::Clone
+                        | Tool::Heal
+                        | Tool::SpotHeal
+                        | Tool::ContentFill
+                        | Tool::Dodge
+                        | Tool::Detail
+                        | Tool::Liquify
+                );
+                if brushy {
+                    ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=400.0).text("size"));
+                    ui.add(
+                        egui::Slider::new(&mut self.brush_hardness, 0.0..=0.99).text("hardness"),
+                    );
+                    ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0).text("opacity"));
+                    ui.checkbox(&mut self.speed_dynamics, "speed→size");
+                    if self.speed_dynamics {
+                        ui.add(egui::Slider::new(&mut self.min_size_scale, 0.05..=1.0).text("min"));
+                    }
+                }
+                if self.tool == Tool::Liquify {
+                    ui.separator();
+                    for (m, name) in [(0u8, "Push"), (1, "Twirl"), (2, "Pucker"), (3, "Bloat")] {
+                        if ui.selectable_label(self.liquify_mode == m, name).clicked() {
+                            self.liquify_mode = m;
+                        }
+                    }
+                }
+                if self.tool == Tool::Detail {
+                    ui.separator();
+                    for (m, name) in [
+                        (0u8, "Saturate"),
+                        (1, "Desaturate"),
+                        (2, "Blur"),
+                        (3, "Sharpen"),
+                    ] {
+                        if ui.selectable_label(self.detail_mode == m, name).clicked() {
+                            self.detail_mode = m;
+                        }
+                    }
+                }
+                if self.tool == Tool::Fill {
+                    ui.separator();
+                    ui.add(
+                        egui::Slider::new(&mut self.fill_tolerance, 0.0..=1.0).text("tolerance"),
+                    );
+                    ui.checkbox(&mut self.fill_contiguous, "contiguous");
+                }
+                if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
+                    ui.checkbox(&mut self.sample_all, "sample all layers");
+                }
+                if matches!(self.tool, Tool::MoveLayer | Tool::Transform) {
+                    ui.separator();
+                    ui.label("Drag to move the active layer; Shift+drag scales (Transform).");
+                }
+                if matches!(
+                    self.tool,
+                    Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand
+                ) {
+                    ui.separator();
+                    ui.label("Shift: add · Alt: subtract");
+                }
+                if matches!(self.tool, Tool::Clone | Tool::Heal | Tool::SpotHeal) {
+                    ui.separator();
+                    ui.label("Alt-click sets the source");
+                }
+            });
+        });
+
         egui::SidePanel::left("tools")
             .exact_width(48.0)
             .show_inside(root, |ui| {
@@ -297,76 +373,8 @@ impl eframe::App for PigmentApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.heading("Brush");
-                        ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=400.0).text("size"));
-                        ui.add(
-                            egui::Slider::new(&mut self.brush_hardness, 0.0..=0.99)
-                                .text("hardness"),
-                        );
-                        ui.add(
-                            egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0).text("opacity"),
-                        );
-                        if self.tool == Tool::Liquify {
-                            ui.horizontal(|ui| {
-                                ui.label("Liquify:");
-                                for (m, name) in
-                                    [(0u8, "Push"), (1, "Twirl"), (2, "Pucker"), (3, "Bloat")]
-                                {
-                                    if ui.selectable_label(self.liquify_mode == m, name).clicked() {
-                                        self.liquify_mode = m;
-                                    }
-                                }
-                            });
-                        }
-                        if self.tool == Tool::Detail {
-                            ui.horizontal(|ui| {
-                                ui.label("Detail:");
-                                for (m, name) in [
-                                    (0u8, "Saturate"),
-                                    (1, "Desaturate"),
-                                    (2, "Blur"),
-                                    (3, "Sharpen"),
-                                ] {
-                                    if ui.selectable_label(self.detail_mode == m, name).clicked() {
-                                        self.detail_mode = m;
-                                    }
-                                }
-                            });
-                        }
-                        ui.checkbox(&mut self.speed_dynamics, "speed → size")
-                    .on_hover_text(
-                        "Faster strokes paint thinner (stylus pressure isn't exposed by eframe)",
-                    );
-                        if self.speed_dynamics {
-                            ui.add(
-                                egui::Slider::new(&mut self.min_size_scale, 0.05..=1.0)
-                                    .text("min size"),
-                            );
-                        }
-                        if self.tool == Tool::Fill {
-                            ui.add(
-                                egui::Slider::new(&mut self.fill_tolerance, 0.0..=1.0)
-                                    .text("tolerance"),
-                            );
-                            ui.checkbox(&mut self.fill_contiguous, "contiguous");
-                        }
-                        if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
-                            ui.checkbox(&mut self.sample_all, "sample all layers");
-                        }
-                        if matches!(self.tool, Tool::MoveLayer | Tool::Transform) {
-                            ui.label("Drag to move the active layer.");
-                            if self.tool == Tool::Transform {
-                                ui.label("Shift+drag to scale.");
-                            }
-                        }
-                        if matches!(
-                            self.tool,
-                            Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand
-                        ) {
-                            ui.label("Shift: add · Alt: subtract.");
-                        }
-
-                        ui.separator();
+                        // Tool options moved to the contextual bar (top). This
+                        // panel holds layer/document properties.
                         {
                             let id = self.active_id();
                             let mut clip = self.clipped_layers.contains(&id);
