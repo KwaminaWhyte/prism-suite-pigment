@@ -33,6 +33,8 @@ pub struct LayerDraw {
     /// Blend-If: gate the layer by its own + the backdrop's luma.
     pub has_blend_if: bool,
     pub blend_if: [f32; 4], // [this_black, this_white, under_black, under_white]
+    /// Clip to the layer directly below (its alpha gates this layer).
+    pub clipped: bool,
 }
 
 /// A selection operation requested by the app for this frame.
@@ -120,7 +122,8 @@ struct CompositeParams {
     _p1: [f32; 2],
     adjust: [f32; 4],
     has_blend_if: u32,
-    _p2: [u32; 3],
+    has_clip: u32, // clip this layer to the layer below's alpha
+    _p2: [u32; 2],
     /// Blend-If luma ranges: [this_black, this_white, under_black, under_white].
     blend_if: [f32; 4],
 }
@@ -137,7 +140,8 @@ impl CompositeParams {
             _p1: [0.0; 2],
             adjust: [0.0; 4],
             has_blend_if: 0,
-            _p2: [0; 3],
+            has_clip: 0,
+            _p2: [0; 2],
             blend_if: [0.0, 1.0, 0.0, 1.0],
         }
     }
@@ -388,6 +392,7 @@ impl CanvasGpu {
                 },
                 tex_entry(4),
                 tex_entry(5),
+                tex_entry(6),
             ],
         });
         let composite_pipeline = make_render_pipeline(
@@ -912,7 +917,8 @@ impl CanvasGpu {
             _p1: [0.0; 2],
             adjust: [0.0; 4],
             has_blend_if: 0,
-            _p2: [0; 3],
+            has_clip: 0,
+            _p2: [0; 2],
             blend_if: [0.0, 1.0, 0.0, 1.0],
         };
         queue.write_buffer(
@@ -964,6 +970,10 @@ impl CanvasGpu {
                     resource: wgpu::BindingResource::TextureView(
                         &self.identity_lut.as_ref().unwrap().view,
                     ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&self.white_mask.view),
                 },
             ],
         });
@@ -1743,6 +1753,10 @@ impl CanvasGpu {
                         &self.identity_lut.as_ref().unwrap().view,
                     ),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&self.white_mask.view),
+                },
             ],
         });
         {
@@ -2001,6 +2015,10 @@ impl CanvasGpu {
                 p.has_blend_if = 1;
                 p.blend_if = l.blend_if;
             }
+            // Clip to the layer below (needs a layer beneath it in the stack).
+            if l.clipped && i > 0 {
+                p.has_clip = 1;
+            }
             if self.xform_layer == Some(l.id) {
                 p.has_xform = 1;
                 p.m = self.xform_m;
@@ -2032,6 +2050,7 @@ impl CanvasGpu {
             u32,
             &wgpu::TextureView,
             &wgpu::TextureView,
+            &wgpu::TextureView, // clipping-mask base (layer below) or white
         )> = Vec::new();
         for (i, l) in visible.iter().enumerate() {
             if let Some(layer) = self.layers.get(&l.id) {
@@ -2040,11 +2059,21 @@ impl CanvasGpu {
                     .get(&l.id)
                     .map(|g| &g.view)
                     .unwrap_or(identity_lut);
+                // Clip base = the layer directly below (white = no clip).
+                let clip_base = if l.clipped && i > 0 {
+                    self.layers
+                        .get(&visible[i - 1].id)
+                        .map(|b| &b.view)
+                        .unwrap_or(&self.white_mask.view)
+                } else {
+                    &self.white_mask.view
+                };
                 passes.push((
                     &layer.view,
                     (i as u64 * PARAMS_STRIDE) as u32,
                     self.mask_view(l.id),
                     lut,
+                    clip_base,
                 ));
                 if self.wet_owner == Some(l.id) {
                     if let Some(wet) = self.wet.as_ref() {
@@ -2053,6 +2082,7 @@ impl CanvasGpu {
                             WET_PARAMS_OFFSET,
                             &self.white_mask.view,
                             identity_lut,
+                            &self.white_mask.view,
                         ));
                     }
                 }
@@ -2072,7 +2102,7 @@ impl CanvasGpu {
         }
 
         let mut src_is_ping = true;
-        for (layer_view, offset, mask_view, lut_view) in passes {
+        for (layer_view, offset, mask_view, lut_view, clip_base_view) in passes {
             let (src, dst) = if src_is_ping {
                 (ping, pong)
             } else {
@@ -2111,6 +2141,10 @@ impl CanvasGpu {
                     wgpu::BindGroupEntry {
                         binding: 5,
                         resource: wgpu::BindingResource::TextureView(lut_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(clip_base_view),
                     },
                 ],
             });
@@ -2520,6 +2554,7 @@ mod gpu_tests {
             adjust: [0.0; 4],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
+            clipped: false,
         }];
         let p = gpu.composite_now(&device, &queue, &order);
         let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
@@ -2587,6 +2622,7 @@ mod gpu_tests {
             adjust: [0.0; 4],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
+            clipped: false,
         }];
 
         // Select the left half, then paint blue over the whole canvas.
@@ -2677,6 +2713,7 @@ mod gpu_tests {
                 adjust: [0.0; 4],
                 has_blend_if: false,
                 blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: false,
             },
             LayerDraw {
                 id: l1,
@@ -2687,6 +2724,7 @@ mod gpu_tests {
                 adjust: p,
                 has_blend_if: false,
                 blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: false,
             },
         ];
         let pp = gpu.composite_now(&device, &queue, &order);
@@ -2730,6 +2768,7 @@ mod gpu_tests {
                 adjust: [0.0; 4],
                 has_blend_if: false,
                 blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: false,
             },
             LayerDraw {
                 id: l1,
@@ -2740,6 +2779,7 @@ mod gpu_tests {
                 adjust: [0.0; 4],
                 has_blend_if: false,
                 blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: false,
             },
         ];
         let pp = gpu.composite_now(&device, &queue, &order);
@@ -2827,6 +2867,7 @@ mod gpu_tests {
                 adjust: [0.0; 4],
                 has_blend_if: false,
                 blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: false,
             },
             LayerDraw {
                 id: l1,
@@ -2837,6 +2878,7 @@ mod gpu_tests {
                 adjust: p,
                 has_blend_if: false,
                 blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: false,
             },
         ];
         let pp = gpu.composite_now(&device, &queue, &order);
@@ -2876,6 +2918,7 @@ mod gpu_tests {
                 adjust: [0.0; 4],
                 has_blend_if: false,
                 blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: false,
             },
             LayerDraw {
                 id: l1,
@@ -2886,6 +2929,7 @@ mod gpu_tests {
                 adjust: [0.0; 4],
                 has_blend_if: true,
                 blend_if: [0.0, 0.45, 0.0, 1.0],
+                clipped: false,
             },
         ];
         let pp = gpu.composite_now(&device, &queue, &order);
@@ -2893,6 +2937,72 @@ mod gpu_tests {
         assert!(
             px[0] > 0.9,
             "blend-if hides gray top -> white shows through: {px:?}"
+        );
+    }
+
+    // Clipping mask: a green top layer clipped to a base that's opaque on the left
+    // and transparent on the right shows green only on the left.
+    #[test]
+    fn clipping_mask_gates_by_base_alpha() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping clipping_mask_gates_by_base_alpha");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        let l1 = LayerId(1);
+        gpu.ensure_layer(&device, l0);
+        gpu.ensure_layer(&device, l1);
+        // Base: left half opaque red, right half transparent.
+        let mut base = Vec::new();
+        for _y in 0..8 {
+            for x in 0..8 {
+                let px = if x < 4 {
+                    [1.0, 0.0, 0.0, 1.0]
+                } else {
+                    [0.0, 0.0, 0.0, 0.0]
+                };
+                for &c in &px {
+                    base.extend_from_slice(&half::f16::from_f32(c).to_le_bytes());
+                }
+            }
+        }
+        gpu.upload_layer(&queue, l0, &base);
+        gpu.upload_layer(&queue, l1, &solid(8, 0.0, 1.0, 0.0, 1.0)); // green top
+
+        let order = vec![
+            LayerDraw {
+                id: l0,
+                opacity: 1.0,
+                blend: 0,
+                visible: true,
+                adjust_kind: 0,
+                adjust: [0.0; 4],
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: false,
+            },
+            LayerDraw {
+                id: l1,
+                opacity: 1.0,
+                blend: 0,
+                visible: true,
+                adjust_kind: 0,
+                adjust: [0.0; 4],
+                has_blend_if: false,
+                blend_if: [0.0, 1.0, 0.0, 1.0],
+                clipped: true,
+            },
+        ];
+        let pp = gpu.composite_now(&device, &queue, &order);
+        let left = gpu.read_composite_pixel(&device, &queue, pp, 2, 4).unwrap();
+        let right = gpu.read_composite_pixel(&device, &queue, pp, 6, 4).unwrap();
+        assert!(left[1] > 0.8, "green shows over opaque base: {left:?}");
+        assert!(
+            right[3] < 0.1,
+            "clipped out where base is transparent: {right:?}"
         );
     }
 
@@ -2925,6 +3035,7 @@ mod gpu_tests {
             adjust: [0.0; 4],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
+            clipped: false,
         }];
         let p = gpu.composite_now(&device, &queue, &order);
         let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();

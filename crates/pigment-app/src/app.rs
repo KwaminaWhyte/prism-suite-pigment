@@ -184,6 +184,8 @@ pub struct PigmentApp {
     edit_mask: bool,
     /// Per-layer Blend-If luma ranges [this_black, this_white, under_black, under_white].
     blend_if: HashMap<LayerId, [f32; 4]>,
+    /// Layers clipped to the layer directly below (clipping mask).
+    clipped_layers: HashSet<LayerId>,
 
     // Filters.
     filter_radius: f32,
@@ -281,6 +283,7 @@ impl PigmentApp {
             resize_h: 800,
             masked_layers: HashSet::new(),
             blend_if: HashMap::new(),
+            clipped_layers: HashSet::new(),
             edit_mask: false,
             filter_radius: 4.0,
             filter_amount: 1.0,
@@ -1098,6 +1101,7 @@ impl PigmentApp {
                     v.to_bits().hash(&mut h);
                 }
             }
+            self.clipped_layers.contains(&l.id).hash(&mut h);
         }
         h.finish()
     }
@@ -1126,6 +1130,7 @@ impl PigmentApp {
                     adjust,
                     has_blend_if: blend_if.is_some(),
                     blend_if: blend_if.unwrap_or([0.0, 1.0, 0.0, 1.0]),
+                    clipped: self.clipped_layers.contains(&l.id),
                 }
             })
             .collect()
@@ -2227,6 +2232,24 @@ impl eframe::App for PigmentApp {
                     Tool::SelectRect | Tool::SelectEllipse | Tool::Lasso | Tool::MagicWand
                 ) {
                     ui.label("Shift: add · Alt: subtract.");
+                }
+
+                ui.separator();
+                {
+                    let id = self.active_id();
+                    let mut clip = self.clipped_layers.contains(&id);
+                    if ui
+                        .checkbox(&mut clip, "Clip to layer below")
+                        .on_hover_text("Clipping mask: show only over the layer beneath's pixels")
+                        .changed()
+                    {
+                        if clip {
+                            self.clipped_layers.insert(id);
+                        } else {
+                            self.clipped_layers.remove(&id);
+                        }
+                        self.force_composite = true;
+                    }
                 }
 
                 ui.separator();

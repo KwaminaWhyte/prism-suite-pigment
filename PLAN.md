@@ -273,7 +273,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 - [ ] **Layer styles / FX** (L): Stroke, Drop Shadow, Inner Shadow, Outer/Inner Glow, Bevel & Emboss, Color/Gradient/Pattern Overlay, Satin — live, re-evaluated as GPU passes around the layer; per-effect blend mode/opacity; copy/paste/scale styles; FX as collapsible layer children
 - [ ] **Smart Objects** (L): embedded + linked; wrap any layer/selection; transforms & filters re-applied non-destructively to the source render; "edit contents" → child document; replace-contents; place external (`.pigment`/`.contour`/image/PDF/Pulse-comp via Dynamic Link)
 - [ ] **Smart Filters** (M): any Phase-6/8 filter applied to a smart object stays editable, re-orderable, masked, toggle-able
-- [ ] **Clipping masks** (S) + **vector masks** (M, from Phase 4 pen) + **group/nested masks** + mask density/feather + mask panel
+- [~] **Clipping masks** (S) **done** — a layer clips to the alpha of the layer directly below, gated in the composite shader (clip-base texture binding); per-layer toggle + GPU pixel test. *Still:* **vector masks** (M, from Phase 4 pen), **group/nested masks**, mask density/feather, mask panel.
 - [~] **Blend-If / advanced blending** (M): **done** — this-layer + underlying-layer gray-range gating with soft-feathered ranges, evaluated in the composite shader (the backdrop is already bound); per-layer sliders + GPU pixel test. *Still:* per-channel split sliders, fill-vs-opacity, knockout, blend-interior effects.
 - [ ] **Channels panel** (M, shared types): view/edit per-channel; alpha channels (save/load selections as masks); spot channels; channel from selection; split/merge channels
 - [ ] **Layer comps** (S): named snapshots of visibility/position/appearance

@@ -12,8 +12,8 @@ struct Params {
     _p1: vec2<f32>,
     adjust: vec4<f32>, // adjustment params
     has_blend_if: u32,
-    _p2a: u32, // scalar pads (NOT vec3 — vec3 would force 16-byte align, mismatching [u32;3])
-    _p2b: u32,
+    has_clip: u32,
+    _p2b: u32, // scalar pads (NOT vec3 — vec3 would force 16-byte align, mismatching Rust)
     _p2c: u32,
     blend_if: vec4<f32>, // this_black, this_white, under_black, under_white
 };
@@ -24,6 +24,7 @@ struct Params {
 @group(0) @binding(3) var<uniform> params: Params;
 @group(0) @binding(4) var mask_tex: texture_2d<f32>; // R = layer mask (1x1 white if none)
 @group(0) @binding(5) var lut_tex: texture_2d<f32>;  // Curves LUT 256x1: rgba = (rCurve, gCurve, bCurve, masterCurve)
+@group(0) @binding(6) var clip_base: texture_2d<f32>; // clipping mask base (layer below); .a gates the source
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -234,6 +235,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         * (params.opacity * mask);
     if !in_bounds {
         s = vec4<f32>(0.0);
+    }
+
+    // Clipping mask: gate the source by the base (below) layer's alpha.
+    if params.has_clip != 0u {
+        s = s * textureSample(clip_base, samp, in.uv).a;
     }
 
     // Blend-If: gate the source by its own luma + the backdrop's luma.
