@@ -7,6 +7,9 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Dodge & Burn** (Phase 6 retouch). Brush to lighten (dodge), or hold Alt to
+  darken (burn); a soft coverage mask accumulates over the stroke and is applied
+  in linear light on release (`prism_core::tone::dodge_burn`, unit-tested).
 - **Content-Aware Fill** (Phase 6 retouch). Brush a region; on release
   `prism_core::inpaint::content_aware_fill` synthesizes it from the surrounding
   texture via PatchMatch (approximate-NNF propagation + random search + patch

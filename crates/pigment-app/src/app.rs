@@ -34,6 +34,7 @@ enum Tool {
     Heal,        // healing brush: Alt-click source, brush region, gradient-domain heal on release
     SpotHeal,    // spot heal: brush a blemish, auto-source + heal on release (no manual source)
     ContentFill, // content-aware fill: brush a region, PatchMatch-synthesize from surroundings
+    Dodge,       // dodge (lighten) / burn (darken with Alt) — brushed soft tonal adjust
     Fill,
     Eyedropper,
     SelectRect,
@@ -141,6 +142,9 @@ pub struct PigmentApp {
     /// Healing Brush coverage (canvas-sized, doc px); accumulated over a stroke,
     /// solved on release.
     heal_mask: Vec<bool>,
+    /// Dodge/Burn soft coverage (0..1, canvas-sized); accumulated over a stroke,
+    /// applied on release.
+    tone_mask: Vec<f32>,
     undo_count: u32,
     redo_count: u32,
     // Compositing dirty tracking.
@@ -242,6 +246,7 @@ impl PigmentApp {
             clone_source: None,
             clone_offset: [0.0; 2],
             heal_mask: Vec::new(),
+            tone_mask: Vec::new(),
             undo_count: 0,
             redo_count: 0,
             force_composite: true,
@@ -583,6 +588,77 @@ impl PigmentApp {
                 img[p * 4 + 3] = a;
             }
             let solved = prism_core::inpaint::content_aware_fill(&img, &mask, w, h, 3, 6);
+            let mut out = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = solved[p * 4 + 3];
+                out[p * 4] = solved[p * 4] * a;
+                out[p * 4 + 1] = solved[p * 4 + 1] * a;
+                out[p * 4 + 2] = solved[p * 4 + 2] * a;
+                out[p * 4 + 3] = a;
+            }
+            gpu.upload_layer(q, active, &f32_to_f16_bytes(&out));
+        });
+        self.force_composite = true;
+    }
+
+    /// Accumulate a soft round dab of `r` (doc px) into the dodge/burn coverage,
+    /// peaking `flow` at center and tapering to the edge (clamped to 1).
+    fn tone_mark(&mut self, c: egui::Vec2, r: f32, flow: f32) {
+        let (w, h) = (self.doc.size.width as i64, self.doc.size.height as i64);
+        if self.tone_mask.len() != (w * h) as usize {
+            self.tone_mask = vec![0.0; (w * h) as usize];
+        }
+        let x0 = (c.x - r).floor() as i64;
+        let x1 = (c.x + r).ceil() as i64;
+        let y0 = (c.y - r).floor() as i64;
+        let y1 = (c.y + r).ceil() as i64;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if x < 0 || y < 0 || x >= w || y >= h {
+                    continue;
+                }
+                let dx = x as f32 + 0.5 - c.x;
+                let dy = y as f32 + 0.5 - c.y;
+                let d = (dx * dx + dy * dy).sqrt();
+                if d <= r {
+                    let f = (1.0 - d / r) * flow;
+                    let i = (y * w + x) as usize;
+                    self.tone_mask[i] = (self.tone_mask[i] + f).min(1.0);
+                }
+            }
+        }
+    }
+
+    /// Apply dodge (or burn) over the accumulated tonal coverage on release.
+    fn do_dodge_burn(&mut self, frame: &mut eframe::Frame, burn: bool) {
+        if !self.tone_mask.iter().any(|&m| m > 0.0) {
+            return;
+        }
+        let (w, h) = (self.doc.size.width as usize, self.doc.size.height as usize);
+        if self.tone_mask.len() != w * h {
+            return;
+        }
+        let active = self.active_id();
+        let cover = std::mem::take(&mut self.tone_mask);
+        let sign = if burn { -1.0 } else { 1.0 };
+        let label = if burn { "Burn" } else { "Dodge" };
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, label);
+            let Some(bytes) = gpu.read_layer(d, q, active) else {
+                return;
+            };
+            let prem = f16_bytes_to_f32(&bytes);
+            let mut img = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = prem[p * 4 + 3];
+                let inv = if a > 1e-5 { 1.0 / a } else { 0.0 };
+                img[p * 4] = prem[p * 4] * inv;
+                img[p * 4 + 1] = prem[p * 4 + 1] * inv;
+                img[p * 4 + 2] = prem[p * 4 + 2] * inv;
+                img[p * 4 + 3] = a;
+            }
+            let amount: Vec<f32> = cover.iter().map(|&c| sign * c).collect();
+            let solved = prism_core::tone::dodge_burn(&img, &amount, w, h);
             let mut out = vec![0.0f32; w * h * 4];
             for p in 0..w * h {
                 let a = solved[p * 4 + 3];
@@ -1896,6 +1972,11 @@ impl eframe::App for PigmentApp {
                         icons::CONTENT_FILL,
                         "Content-aware fill (brush region; PatchMatch on release)",
                     ),
+                    (
+                        Tool::Dodge,
+                        icons::DODGE,
+                        "Dodge / burn — lighten, or darken with Alt (applies on release)",
+                    ),
                     (Tool::Fill, icons::FILL, "Bucket fill"),
                     (Tool::Eyedropper, icons::EYEDROPPER, "Eyedropper"),
                     (Tool::SelectRect, icons::RECT_SELECT, "Rectangle select"),
@@ -2639,6 +2720,45 @@ impl eframe::App for PigmentApp {
                                 && response.interact_pointer_pos().is_none())
                         {
                             self.do_content_fill(frame);
+                            self.stroke_last = None;
+                        }
+                    }
+                    Tool::Dodge => {
+                        let burn = ui.input(|i| i.modifiers.alt);
+                        let r = self.brush_size * 0.5;
+                        let flow = (self.brush_opacity * 0.4).clamp(0.02, 1.0);
+                        if let Some(p) = response.interact_pointer_pos() {
+                            let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                            match self.stroke_last {
+                                None => {
+                                    let n = (self.doc.size.width * self.doc.size.height) as usize;
+                                    self.tone_mask = vec![0.0; n];
+                                    self.tone_mark(cur, r, flow);
+                                    self.stroke_last = Some(cur);
+                                }
+                                Some(last) => {
+                                    let seg = cur - last;
+                                    let dist = seg.length();
+                                    if dist > 1e-3 {
+                                        let dir = seg / dist;
+                                        let step = (r * 0.25).max(1.0);
+                                        let mut t = 0.0;
+                                        while t <= dist {
+                                            self.tone_mark(last + dir * t, r, flow);
+                                            t += step;
+                                        }
+                                        self.tone_mark(cur, r, flow);
+                                        self.stroke_last = Some(cur);
+                                    }
+                                }
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped()
+                            || (self.stroke_last.is_some()
+                                && response.interact_pointer_pos().is_none())
+                        {
+                            self.do_dodge_burn(frame, burn);
                             self.stroke_last = None;
                         }
                     }

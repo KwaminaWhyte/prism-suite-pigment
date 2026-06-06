@@ -263,7 +263,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 - [ ] **Patch tool** (M): lasso a region, drag onto a source area, seamless-blend (Poisson) the result
 - [x] **Content-Aware Fill** (brush a region → `prism_core::inpaint::content_aware_fill` synthesizes it from surrounding texture via PatchMatch — approximate-NNF propagation + random search + patch voting, deterministic; unit-tested incl. content-awareness). *Still: selection-driven invocation, scale/mirror/rotation adaptation, optional LaMa-ONNX structural guidance.*
 - [ ] **Remove tool** (M, AI-assist): brush over an object → content-aware/LaMa removal in one stroke
-- [ ] **Dodge / Burn / Sponge** (S): exposure/saturation brushes with shadows/mids/highlights range + protect-tones
+- [x] **Dodge / Burn** (brushed soft tonal adjust — lighten, or darken with Alt; accumulates a soft coverage mask over the stroke, applied via `prism_core::tone::dodge_burn` on release; unit-tested). *Still: Sponge (saturation), shadows/mids/highlights range + protect-tones.*
 - [ ] **Blur / Sharpen / Smudge tools** (S): localized GPU brush variants (smudge RMW already prototyped in brush research)
 - [ ] **Red-eye** (S): detect + desaturate/darken pupil
 - [ ] **Liquify** (L): forward-mapping mesh warp — push/pull, twirl, pucker, bloat, freeze/thaw mask, reconstruct; GPU displacement texture; face-aware later (AI, Phase 10)
