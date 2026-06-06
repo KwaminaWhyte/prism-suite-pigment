@@ -277,7 +277,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 - [ ] **Blend-If / advanced blending** (M): this-layer / underlying-layer gray + per-channel split sliders; fill-vs-opacity; knockout; blend interior effects
 - [ ] **Channels panel** (M, shared types): view/edit per-channel; alpha channels (save/load selections as masks); spot channels; channel from selection; split/merge channels
 - [ ] **Layer comps** (S): named snapshots of visibility/position/appearance
-- [ ] **Adjustment expansion** (M): Curves (UI from Ph4), Color Balance, Vibrance, Photo Filter, Channel Mixer, Selective Color, Gradient Map, Color Lookup (`.cube`/`.3dl` LUT, shared with suite), Posterize, Shadows/Highlights, HDR Toning, Equalize, Replace/Match Color
+- [~] **Adjustment expansion** (M): **done** — Curves (Ph4), **Vibrance**, **Photo Filter**, **Posterize** (all non-destructive adjustment layers, composite-shader kinds 9/10/11, GPU-tested). *Still:* Color Balance, Channel Mixer, Selective Color, Gradient Map, Color Lookup (`.cube`/`.3dl` LUT), Shadows/Highlights, HDR Toning, Equalize, Replace/Match Color.
 - [ ] Tests: layer-style pass pixel asserts; smart-object re-render on source edit; blend-if math; alpha-channel round-trip
 
 ### Phase 8 — Filters & distort galleries  *(creative + corrective filters)*

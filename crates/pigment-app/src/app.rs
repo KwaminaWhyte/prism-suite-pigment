@@ -1721,6 +1721,25 @@ fn adjustment_ui(ui: &mut egui::Ui, adj: &mut Adjustment) {
         Adjustment::Curves(cp) => {
             curve_editor(ui, cp);
         }
+        Adjustment::Vibrance { amount } => {
+            ui.add(egui::Slider::new(amount, -1.0..=1.0).text("vibrance"));
+        }
+        Adjustment::PhotoFilter { color, density } => {
+            ui.horizontal(|ui| {
+                ui.label("color");
+                ui.color_edit_button_rgb(color);
+            });
+            ui.add(egui::Slider::new(density, 0.0..=1.0).text("density"));
+        }
+        Adjustment::Posterize { levels } => {
+            let mut l = *levels as f32;
+            if ui
+                .add(egui::Slider::new(&mut l, 2.0..=32.0).text("levels"))
+                .changed()
+            {
+                *levels = l.round() as u32;
+            }
+        }
         Adjustment::Invert | Adjustment::BlackWhite => {
             ui.label("(no parameters)");
         }

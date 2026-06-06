@@ -2770,6 +2770,50 @@ mod gpu_tests {
         );
     }
 
+    // A Posterize(2) adjustment over a mid-gray layer snaps it to white (the
+    // sRGB-space value rounds up at 2 levels) — exercises a new adjustment kind.
+    #[test]
+    fn posterize_adjustment() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping posterize_adjustment");
+            return;
+        };
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size::new(8, 8);
+        gpu.ensure_canvas(&device, size);
+        let l0 = LayerId(0);
+        let l1 = LayerId(1);
+        gpu.ensure_layer(&device, l0);
+        gpu.ensure_layer(&device, l1);
+        gpu.upload_layer(&queue, l0, &solid(8, 0.6, 0.6, 0.6, 1.0)); // mid gray
+
+        let (k, p) = prism_core::adjust::Adjustment::Posterize { levels: 2 }.encode();
+        let order = vec![
+            LayerDraw {
+                id: l0,
+                opacity: 1.0,
+                blend: 0,
+                visible: true,
+                adjust_kind: 0,
+                adjust: [0.0; 4],
+            },
+            LayerDraw {
+                id: l1,
+                opacity: 1.0,
+                blend: 0,
+                visible: true,
+                adjust_kind: k,
+                adjust: p,
+            },
+        ];
+        let pp = gpu.composite_now(&device, &queue, &order);
+        let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
+        assert!(
+            px[0] > 0.9,
+            "posterize(2) snaps mid gray up to white: {px:?}"
+        );
+    }
+
     // A layer mask (0 on the left half) hides those pixels in the composite.
     #[test]
     fn layer_mask_hides() {

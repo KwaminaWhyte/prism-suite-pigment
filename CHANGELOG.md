@@ -7,6 +7,10 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Adjustment expansion** (Phase 7). Three new non-destructive adjustment layers —
+  **Vibrance** (saturation weighted to low-sat pixels), **Photo Filter**
+  (luminosity-preserving warm/cool tint), **Posterize** (level quantize) — as
+  compositor shader kinds 9/10/11, with sliders + a GPU pixel test.
 - **Detail brush** (Phase 6). One brush, four modes — **Saturate / Desaturate**
   (sponge, `prism_core::tone::sponge`) and **Blur / Sharpen**
   (`prism_core::detail::blur_sharpen`) — applied over a soft brushed coverage mask

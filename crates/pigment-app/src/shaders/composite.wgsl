@@ -171,6 +171,25 @@ fn apply_adjust(kind: u32, p: vec4<f32>, c_lin: vec3<f32>) -> vec3<f32> {
         case 6u: { let y = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)); c = vec3<f32>(select(0.0, 1.0, y >= p.x)); }
         case 7u: { c = vec3<f32>(dot(c, vec3<f32>(0.2126, 0.7152, 0.0722))); }
         case 8u: { c = clamp(apply_curves(c), vec3<f32>(0.0), vec3<f32>(1.0)); }
+        case 9u: { // Vibrance: boost more where saturation is low
+            let mx = max(c.r, max(c.g, c.b));
+            let mn = min(c.r, min(c.g, c.b));
+            let sat = mx - mn;
+            let lum = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let boost = p.x * (1.0 - sat);
+            c = lum + (c - lum) * (1.0 + boost);
+        }
+        case 10u: { // Photo Filter: luminosity-preserving color tint
+            let lum0 = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let tinted = c * p.xyz;
+            let lum1 = max(dot(tinted, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4);
+            let preserved = tinted * (lum0 / lum1);
+            c = mix(c, preserved, p.w);
+        }
+        case 11u: { // Posterize: quantize to p.x levels
+            let n = max(p.x, 2.0) - 1.0;
+            c = floor(c * n + 0.5) / n;
+        }
         default: {}
     }
     return s2l(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
