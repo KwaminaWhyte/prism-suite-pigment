@@ -197,7 +197,13 @@ impl PigmentApp {
         let mut loaded_styles: Vec<(LayerId, RuntimeLayerStyles)> = Vec::new();
         for (i, lm) in meta.layers.iter().enumerate() {
             let id = doc.layers.alloc_id();
-            let mut layer = Layer::raster(id, lm.name.clone());
+            // Adjustment layers carry a serialized `Adjustment` descriptor;
+            // restore them as adjustment layers (kind + params). Everything else
+            // (including old docs with no `adjustment` key) loads as raster.
+            let mut layer = match &lm.adjustment {
+                Some(adj) => Layer::adjustment(id, lm.name.clone(), adj.clone()),
+                None => Layer::raster(id, lm.name.clone()),
+            };
             layer.opacity = lm.opacity;
             layer.visible = lm.visible;
             layer.blend = BlendMode::from_shader_id(lm.blend);
@@ -485,6 +491,12 @@ impl PigmentApp {
                     opacity: l.opacity,
                     visible: l.visible,
                     styles: runtime_styles_to_meta(&self.collect_runtime_styles(l.id)),
+                    // Persist the full adjustment descriptor (kind + every param)
+                    // for adjustment layers so they round-trip; `None` otherwise.
+                    adjustment: match &l.kind {
+                        LayerKind::Adjustment(a) => Some(a.clone()),
+                        _ => None,
+                    },
                 })
                 .collect(),
         };
@@ -671,5 +683,106 @@ mod style_persist_tests {
         assert!(rt.drop_shadow.is_none());
         assert!(rt.color_overlay.is_none());
         assert!(rt.grad_overlay.is_none());
+    }
+}
+
+#[cfg(test)]
+mod adjustment_persist_tests {
+    use super::*;
+    use prism_core::layer::Layer;
+
+    /// Build a `LayerMeta` from a layer the way `save_pigment` does (only the
+    /// adjustment-relevant fields), then serialize → deserialize and reconstruct
+    /// the layer the way `open_pigment` does. Returns the rebuilt layer's kind so
+    /// tests can assert the adjustment kind + every param survived round-trip.
+    /// GPU pixel upload is intentionally excluded (untested per repo convention).
+    fn round_trip_layer(layer: &Layer) -> LayerKind {
+        // --- save mapping (mirror of `save_pigment`) ---
+        let meta = LayerMeta {
+            id: layer.id.0,
+            name: layer.name.clone(),
+            blend: layer.blend.shader_id(),
+            opacity: layer.opacity,
+            visible: layer.visible,
+            styles: None,
+            adjustment: match &layer.kind {
+                LayerKind::Adjustment(a) => Some(a.clone()),
+                _ => None,
+            },
+        };
+
+        // --- the actual on-disk hop: JSON serialize + deserialize ---
+        let json = serde_json::to_string(&meta).expect("serialize LayerMeta");
+        let back: LayerMeta = serde_json::from_str(&json).expect("deserialize LayerMeta");
+
+        // --- load mapping (mirror of `open_pigment`) ---
+        let rebuilt = match &back.adjustment {
+            Some(adj) => Layer::adjustment(layer.id, back.name.clone(), adj.clone()),
+            None => Layer::raster(layer.id, back.name.clone()),
+        };
+        rebuilt.kind
+    }
+
+    /// Curves (variable-length per-channel control points) round-trips: every
+    /// knot of the master + R/G/B curves survives save→load.
+    #[test]
+    fn curves_adjustment_round_trips() {
+        let cp = CurvePoints {
+            rgb: vec![(0.0, 0.1), (0.5, 0.7), (1.0, 0.9)],
+            r: vec![(0.0, 0.0), (1.0, 0.8)],
+            g: vec![(0.0, 0.2), (0.4, 0.5), (1.0, 1.0)],
+            b: vec![(0.0, 0.05), (1.0, 0.95)],
+        };
+        let original = Adjustment::Curves(cp.clone());
+        let layer = Layer::adjustment(LayerId(3), "Curves", original.clone());
+
+        match round_trip_layer(&layer) {
+            LayerKind::Adjustment(Adjustment::Curves(back)) => assert_eq!(back, cp),
+            other => panic!("expected Curves adjustment, got {other:?}"),
+        }
+    }
+
+    /// Color Balance (multi-param: 3 ranges × 3 channels + a flag) round-trips
+    /// with every param intact.
+    #[test]
+    fn color_balance_adjustment_round_trips() {
+        let original = Adjustment::ColorBalance {
+            shadows: [0.2, -0.1, 0.3],
+            midtones: [-0.4, 0.5, 0.0],
+            highlights: [0.1, 0.1, -0.6],
+            preserve_luminosity: false,
+        };
+        let layer = Layer::adjustment(LayerId(4), "Color Balance", original.clone());
+
+        match round_trip_layer(&layer) {
+            LayerKind::Adjustment(a) => assert_eq!(a, original),
+            other => panic!("expected Color Balance adjustment, got {other:?}"),
+        }
+    }
+
+    /// Channel Mixer (3×4 matrix + monochrome flag) round-trips with every
+    /// coefficient intact.
+    #[test]
+    fn channel_mixer_adjustment_round_trips() {
+        let original = Adjustment::ChannelMixer {
+            r: [0.6, 0.3, 0.1, 0.05],
+            g: [0.0, 1.2, -0.2, 0.0],
+            b: [0.1, 0.0, 0.9, -0.1],
+            monochrome: true,
+        };
+        let layer = Layer::adjustment(LayerId(5), "Channel Mixer", original.clone());
+
+        match round_trip_layer(&layer) {
+            LayerKind::Adjustment(a) => assert_eq!(a, original),
+            other => panic!("expected Channel Mixer adjustment, got {other:?}"),
+        }
+    }
+
+    /// A raster layer carries no adjustment payload and reconstructs as raster
+    /// (back-compat: non-adjustment layers are unaffected).
+    #[test]
+    fn raster_layer_has_no_adjustment() {
+        let layer = Layer::raster(LayerId(6), "bg");
+        assert!(matches!(round_trip_layer(&layer), LayerKind::Raster));
     }
 }

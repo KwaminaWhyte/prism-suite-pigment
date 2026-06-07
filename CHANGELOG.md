@@ -7,6 +7,29 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Adjustment layers persist to `.pigment`** (Phase 7). Closes a known
+  data-loss gap: adjustment layers were runtime-only — saving and reopening a
+  document silently dropped every adjustment layer's parameters (and the
+  adjustment layer itself reloaded as a blank raster layer). They now round-trip
+  losslessly for **every** adjustment kind (Brightness/Contrast, Levels,
+  Hue/Saturation, Exposure, Invert, Threshold, Black & White, Curves, Vibrance,
+  Photo Filter, Posterize, Gradient Map, Color Balance, Channel Mixer — kinds up
+  to 14). Follows the proven layer-styles persistence pattern: the `.pigment`
+  doc model (`prism-io::document_file`) gains an optional per-layer `adjustment`
+  payload (`Option<prism_core::Adjustment>`), reusing the shared `Adjustment`
+  enum's own serde derive verbatim so the kind + every param (including Curves'
+  variable-length per-channel control points and Channel Mixer's 3×4 matrix)
+  serialize unchanged. The field uses `#[serde(default)]` + `skip_serializing_if`
+  so **old documents (no `adjustment` key) still load** (as raster, as before)
+  and non-adjustment layers stay byte-compact. On save, each
+  `LayerKind::Adjustment` is written to `LayerMeta.adjustment`; on open, layers
+  with that payload are rebuilt as adjustment layers and the existing recomposite
+  path (`sync_curve_luts` / compositor params) rebuilds their LUTs/matrices so
+  the restored adjustment renders immediately. Save→load round-trip unit-tested
+  for Curves, Color Balance, and Channel Mixer (kind + every param), plus a
+  raster back-compat case; prism-io adds a full-payload serde round-trip + an
+  old-doc back-compat test. This was the last open item on the Phase-7
+  adjustment work.
 - **Adjustments: Color Balance + Channel Mixer** (Phase 7). Two more
   non-destructive adjustment layers, wired end-to-end through the established
   pattern (model variant in `prism-core::adjust` → composite-shader kind →
@@ -29,9 +52,9 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
   headless-GPU pixel tests (shadow red-push lifts red; red↔blue mixer swap turns
   red into blue). *Still open:* Selective Color, multi-stop Gradient Map, Color
   Lookup (`.cube`/`.3dl` LUT), Shadows/Highlights, HDR Toning, Equalize,
-  Replace/Match Color; Color-Balance/Channel-Mixer params don't yet persist to
-  the `.pigment` doc (the adjustment model isn't serialized there yet — same gap
-  as the other adjustment kinds).
+  Replace/Match Color. (Adjustment params — including Color Balance / Channel
+  Mixer — now persist to the `.pigment` doc; see the adjustment-persistence
+  entry above.)
 - **Layer styles persist to `.pigment`** (Phase 7). Closes a known data-loss
   gap: the 8 non-destructive layer styles (Stroke, Drop Shadow, Color Overlay,
   Inner Shadow, Outer Glow, Inner Glow, Gradient Overlay, Bevel & Emboss) were
