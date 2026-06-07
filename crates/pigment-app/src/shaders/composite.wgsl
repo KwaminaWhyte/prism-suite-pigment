@@ -38,6 +38,13 @@ struct Params {
     grad_opacity: f32,
     grad_color0: vec4<f32>,
     grad_color1: vec4<f32>,
+    has_bevel: u32,
+    bevel_size: f32,
+    bevel_soften: f32,
+    _pb: f32,
+    bevel_light: vec4<f32>,      // light direction (xyz), w unused
+    bevel_highlight: vec4<f32>,  // straight rgba (a = opacity)
+    bevel_shadow: vec4<f32>,     // straight rgba (a = opacity)
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -330,6 +337,41 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let ga = params.inner_glow_color.a * cov;
         let ig = vec4<f32>(params.inner_glow_color.rgb * ga, ga); // premultiplied
         s = vec4<f32>(ig.rgb + s.rgb * (1.0 - ig.a), s.a); // glow over the fill, keep fill alpha
+    }
+
+    // Bevel & Emboss (Inner Bevel): derive a screen-space surface normal from the
+    // alpha field, light it with a directional light, and paint a highlight where
+    // the surface faces the light + a shadow where it faces away — concentrated
+    // within `bevel_size` of the shape's edge. No separate height pass: the alpha
+    // neighborhood is the height field.
+    if params.has_bevel != 0u {
+        let own = textureSampleLevel(layer_tex, samp, clamp(luv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        // Sample radius for the gradient: the bevel width (plus soften for a
+        // smoother normal). Two offset samples per axis -> central difference.
+        let h = max(params.bevel_size + params.bevel_soften, 1.0 / 4096.0);
+        let ax = textureSampleLevel(layer_tex, samp, clamp(luv + vec2<f32>(h, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        let bx = textureSampleLevel(layer_tex, samp, clamp(luv - vec2<f32>(h, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        let ay = textureSampleLevel(layer_tex, samp, clamp(luv + vec2<f32>(0.0, h), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        let by = textureSampleLevel(layer_tex, samp, clamp(luv - vec2<f32>(0.0, h), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        // Gradient of the alpha (height) field; points from inside toward outside.
+        let grad = vec2<f32>(ax - bx, ay - by) * 0.5;
+        // Edge proximity: |grad| is large on the bevel band, ~0 in the flat core.
+        let edge = clamp(length(grad) * 2.0, 0.0, 1.0);
+        // Surface normal: tilt away from the gradient; z (steepness) ~ depth.
+        let n = normalize(vec3<f32>(-grad.x, -grad.y, 0.5));
+        let l = normalize(params.bevel_light.xyz);
+        let ndl = dot(n, l); // >0 faces the light (highlight); <0 faces away (shadow)
+        // Concentrate the effect inside the shape and on the edge band.
+        let band = edge * own * (params.opacity * mask);
+        let hi_amt = clamp(ndl, 0.0, 1.0) * params.bevel_highlight.a * band;
+        let sh_amt = clamp(-ndl, 0.0, 1.0) * params.bevel_shadow.a * band;
+        // Highlight (screen-ish add) then shadow (over) on the fill, keep alpha.
+        let hl = vec4<f32>(params.bevel_highlight.rgb * hi_amt, hi_amt);
+        var rgb = s.rgb + hl.rgb * (1.0 - s.a) + hl.rgb * s.a; // brighten covered fill
+        rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(s.a));
+        let sa2 = params.bevel_shadow.rgb * sh_amt;
+        rgb = rgb * (1.0 - sh_amt) + sa2 * s.a;
+        s = vec4<f32>(rgb, s.a);
     }
 
     // Outer-stroke layer style: ring of the layer's alpha outside its own edge,

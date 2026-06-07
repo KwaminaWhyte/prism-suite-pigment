@@ -230,6 +230,11 @@ impl PigmentApp {
                     v.to_bits().hash(&mut h);
                 }
             }
+            if let Some((hi, sh, sz, soft, ang, alt)) = self.layer_bevels.get(&l.id) {
+                for v in hi.iter().chain(sh.iter()).chain([sz, soft, ang, alt]) {
+                    v.to_bits().hash(&mut h);
+                }
+            }
         }
         h.finish()
     }
@@ -256,6 +261,7 @@ impl PigmentApp {
                 let outer_glow = self.layer_outer_glows.get(&l.id);
                 let inner_glow = self.layer_inner_glows.get(&l.id);
                 let grad = self.layer_grad_overlays.get(&l.id);
+                let bevel = self.layer_bevels.get(&l.id);
                 let cw = self.doc.size.width.max(1) as f32;
                 LayerDraw {
                     id: l.id,
@@ -295,6 +301,13 @@ impl PigmentApp {
                     grad_color1: grad.map(|(_, b, _, _)| *b).unwrap_or([0.0; 4]),
                     grad_angle: grad.map(|(_, _, a, _)| a.to_radians()).unwrap_or(0.0),
                     grad_opacity: grad.map(|(_, _, _, o)| *o).unwrap_or(0.0),
+                    has_bevel: bevel.is_some(),
+                    bevel_highlight: bevel.map(|(hi, _, _, _, _, _)| *hi).unwrap_or([0.0; 4]),
+                    bevel_shadow: bevel.map(|(_, sh, _, _, _, _)| *sh).unwrap_or([0.0; 4]),
+                    bevel_size: bevel.map(|(_, _, sz, _, _, _)| *sz / cw).unwrap_or(0.0),
+                    bevel_soften: bevel.map(|(_, _, _, so, _, _)| *so / cw).unwrap_or(0.0),
+                    bevel_angle: bevel.map(|(_, _, _, _, a, _)| a.to_radians()).unwrap_or(0.0),
+                    bevel_altitude: bevel.map(|(_, _, _, _, _, al)| al.to_radians()).unwrap_or(0.0),
                 }
             })
             .collect()

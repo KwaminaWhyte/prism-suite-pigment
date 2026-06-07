@@ -7,6 +7,18 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Layer style: Bevel & Emboss (Inner Bevel)** (Phase 7). The last and hardest
+  of the common Photoshop layer styles, evaluated live in the compositor with no
+  separate height pass. A screen-space surface normal is derived from a central
+  difference of the layer's alpha (height) field; a directional light (azimuth
+  *angle* + *altitude*) shades it, painting a **highlight** where the surface
+  faces the light and a **shadow** where it faces away, concentrated within *size*
+  pixels of the edge (with optional *soften*). Per-layer highlight/shadow color +
+  opacity, size, soften, angle, altitude controls; one GPU pixel test (highlight
+  brighter on the light-facing edge, shadow darker on the opposite edge, nothing
+  outside the shape). This rounds out the common PS layer-style set — only
+  **Satin** and **Pattern Overlay** remain. (`CompositeParams` is now 352 bytes,
+  still within the 512-byte `PARAMS_STRIDE` slot.)
 - **Layer styles: Inner Shadow, Outer Glow, Inner Glow, Gradient Overlay**
   (Phase 7). Four more non-destructive layer FX evaluated live in the compositor,
   reusing the Drop-Shadow / Stroke alpha-neighborhood machinery. **Inner Shadow**
@@ -16,8 +28,8 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
   **Gradient Overlay** recolors the layer's fill with an angled two-color linear
   gradient at adjustable opacity. Per-layer controls (color / offset / blur / size
   / angle / opacity as each needs); four GPU pixel tests. With Stroke, Drop
-  Shadow, and Color Overlay this rounds out the common PS layer-style set —
-  **Bevel & Emboss** is the one remaining gap. (`CompositeParams` outgrew the
+  Shadow, and Color Overlay this brings the common PS layer-style set near
+  completion (Bevel & Emboss landed next). (`CompositeParams` outgrew the
   256-byte uniform slot at 288 bytes, so `PARAMS_STRIDE` is now 512, guarded by a
   compile-time size/alignment assert.)
 - **Patch tool** (Phase 6 retouch). Lasso/freehand-select a region and drag it to

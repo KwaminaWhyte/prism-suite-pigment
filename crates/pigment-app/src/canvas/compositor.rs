@@ -208,6 +208,18 @@ impl CanvasGpu {
                 p.inner_glow_color = l.inner_glow_color;
                 p.inner_glow_size = l.inner_glow_size;
             }
+            if l.has_bevel {
+                p.has_bevel = 1;
+                p.bevel_highlight = l.bevel_highlight;
+                p.bevel_shadow = l.bevel_shadow;
+                p.bevel_size = l.bevel_size;
+                p.bevel_soften = l.bevel_soften;
+                // Light direction from azimuth (angle) + altitude. uv y runs
+                // top-down, so flip y to put the light where the angle points.
+                let (ca, sa) = (l.bevel_angle.cos(), l.bevel_angle.sin());
+                let cz = l.bevel_altitude.cos();
+                p.bevel_light = [cz * ca, -cz * sa, l.bevel_altitude.sin(), 0.0];
+            }
             if self.xform_layer == Some(l.id) {
                 p.has_xform = 1;
                 p.m = self.xform_m;

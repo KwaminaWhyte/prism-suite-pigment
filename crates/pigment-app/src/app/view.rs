@@ -726,6 +726,83 @@ impl eframe::App for PigmentApp {
                             });
 
                             ui.separator();
+                            egui::CollapsingHeader::new("Layer style: Bevel & emboss").show(
+                                ui,
+                                |ui| {
+                                    let id = self.active_id();
+                                    let mut on = self.layer_bevels.contains_key(&id);
+                                    if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                                        if on {
+                                            // (highlight, shadow, size px, soften px, angle deg, altitude deg)
+                                            self.layer_bevels.insert(
+                                                id,
+                                                (
+                                                    [1.0, 1.0, 1.0, 0.75],
+                                                    [0.0, 0.0, 0.0, 0.75],
+                                                    5.0,
+                                                    2.0,
+                                                    120.0,
+                                                    30.0,
+                                                ),
+                                            );
+                                        } else {
+                                            self.layer_bevels.remove(&id);
+                                        }
+                                        self.force_composite = true;
+                                    }
+                                    if let Some((hi, sh, size, soft, angle, alt)) =
+                                        self.layer_bevels.get_mut(&id)
+                                    {
+                                        let mut ch = false;
+                                        ui.label("highlight");
+                                        let mut hrgba = *hi;
+                                        if ui
+                                            .color_edit_button_rgba_premultiplied(&mut hrgba)
+                                            .changed()
+                                        {
+                                            *hi = hrgba;
+                                            ch = true;
+                                        }
+                                        ui.label("shadow");
+                                        let mut srgba = *sh;
+                                        if ui
+                                            .color_edit_button_rgba_premultiplied(&mut srgba)
+                                            .changed()
+                                        {
+                                            *sh = srgba;
+                                            ch = true;
+                                        }
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(size, 1.0..=40.0).text("size px"),
+                                            )
+                                            .changed();
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(soft, 0.0..=20.0)
+                                                    .text("soften px"),
+                                            )
+                                            .changed();
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(angle, 0.0..=360.0)
+                                                    .text("angle°"),
+                                            )
+                                            .changed();
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(alt, 0.0..=90.0)
+                                                    .text("altitude°"),
+                                            )
+                                            .changed();
+                                        if ch {
+                                            self.force_composite = true;
+                                        }
+                                    }
+                                },
+                            );
+
+                            ui.separator();
                             egui::CollapsingHeader::new("Channels").show(ui, |ui| {
                                 let names = with_gpu(frame, |gpu, _, _| gpu.channel_names())
                                     .unwrap_or_default();

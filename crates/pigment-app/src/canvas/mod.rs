@@ -66,6 +66,14 @@ pub struct LayerDraw {
     pub grad_color1: [f32; 4],
     pub grad_angle: f32,   // radians
     pub grad_opacity: f32, // 0..1
+    /// Bevel-&-emboss layer style (Inner Bevel).
+    pub has_bevel: bool,
+    pub bevel_highlight: [f32; 4], // straight rgba (a = opacity)
+    pub bevel_shadow: [f32; 4],    // straight rgba (a = opacity)
+    pub bevel_size: f32,           // edge width, uv units
+    pub bevel_soften: f32,         // extra blur of the normal field, uv units
+    pub bevel_angle: f32,          // light azimuth, radians
+    pub bevel_altitude: f32,       // light altitude, radians
 }
 
 /// A selection operation requested by the app for this frame.
@@ -181,6 +189,13 @@ struct CompositeParams {
     grad_opacity: f32,            // 0..1
     grad_color0: [f32; 4],        // straight rgb (a unused)
     grad_color1: [f32; 4],        // straight rgb (a unused)
+    has_bevel: u32,               // bevel-&-emboss layer style (Inner Bevel)
+    bevel_size: f32,              // edge width, uv units
+    bevel_soften: f32,            // extra normal-field blur, uv units
+    _pb: f32,
+    bevel_light: [f32; 4],        // light direction (xyz unit vector; w unused)
+    bevel_highlight: [f32; 4],    // straight rgba (a = opacity)
+    bevel_shadow: [f32; 4],       // straight rgba (a = opacity)
 }
 
 impl CompositeParams {
@@ -221,6 +236,13 @@ impl CompositeParams {
             grad_opacity: 0.0,
             grad_color0: [0.0; 4],
             grad_color1: [0.0; 4],
+            has_bevel: 0,
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            _pb: 0.0,
+            bevel_light: [0.0; 4],
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
         }
     }
 }
@@ -271,8 +293,8 @@ const SEL_FMT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 const LUT_W: u32 = 256;
 const MAX_LAYERS: u64 = 64;
 // Dynamic-offset alignment must be a multiple of 256; CompositeParams grew past
-// 256 bytes once the full layer-style set landed (currently 288), so the slot
-// stride is 512. A compile-time assert (see tests) guards this invariant.
+// 256 bytes once the full layer-style set landed (currently 352, after Bevel &
+// Emboss), so the slot stride is 512. A compile-time assert guards this.
 const PARAMS_STRIDE: u64 = 512;
 const UNDO_MAX: usize = 32;
 /// Params slot reserved for the wet stroke (last slot in the buffer).

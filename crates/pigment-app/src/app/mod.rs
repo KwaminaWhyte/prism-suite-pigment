@@ -255,6 +255,10 @@ pub struct PigmentApp {
     layer_inner_glows: HashMap<LayerId, ([f32; 4], f32)>,
     /// Per-layer gradient-overlay style: (color0 rgb, color1 rgb, angle deg, opacity).
     layer_grad_overlays: HashMap<LayerId, ([f32; 4], [f32; 4], f32, f32)>,
+    /// Per-layer bevel-&-emboss style (Inner Bevel). Tuple:
+    /// (highlight rgba, shadow rgba, size px, soften px, angle deg, altitude deg).
+    #[allow(clippy::type_complexity)]
+    layer_bevels: HashMap<LayerId, ([f32; 4], [f32; 4], f32, f32, f32, f32)>,
     /// Panel visibility (Window menu show/hide).
     panels: PanelVis,
 
@@ -367,6 +371,7 @@ impl PigmentApp {
             layer_outer_glows: HashMap::new(),
             layer_inner_glows: HashMap::new(),
             layer_grad_overlays: HashMap::new(),
+            layer_bevels: HashMap::new(),
             panels: PanelVis::default(),
             edit_mask: false,
             filter_radius: 4.0,

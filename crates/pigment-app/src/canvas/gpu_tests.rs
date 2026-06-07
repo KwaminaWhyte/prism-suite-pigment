@@ -57,6 +57,13 @@ fn base_draw(id: LayerId) -> LayerDraw {
         grad_color1: [0.0; 4],
         grad_angle: 0.0,
         grad_opacity: 0.0,
+        has_bevel: false,
+        bevel_highlight: [0.0; 4],
+        bevel_shadow: [0.0; 4],
+        bevel_size: 0.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,
+        bevel_altitude: 0.0,
     }
 }
 
@@ -128,6 +135,13 @@ fn compositor_brush_wet_undo() {
         grad_color1: [0.0; 4],
         grad_angle: 0.0,
         grad_opacity: 0.0,
+        has_bevel: false,
+        bevel_highlight: [0.0; 4],
+        bevel_shadow: [0.0; 4],
+        bevel_size: 0.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,
+        bevel_altitude: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let px = gpu.read_composite_pixel(&device, &queue, p, 4, 4).unwrap();
@@ -220,6 +234,13 @@ fn selection_clips_paint() {
         grad_color1: [0.0; 4],
         grad_angle: 0.0,
         grad_opacity: 0.0,
+        has_bevel: false,
+        bevel_highlight: [0.0; 4],
+        bevel_shadow: [0.0; 4],
+        bevel_size: 0.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,
+        bevel_altitude: 0.0,
     }];
 
     // Select the left half, then paint blue over the whole canvas.
@@ -335,6 +356,13 @@ fn adjustment_invert() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -370,6 +398,13 @@ fn adjustment_invert() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -438,6 +473,13 @@ fn curves_invert_master() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -473,6 +515,13 @@ fn curves_invert_master() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -585,6 +634,13 @@ fn posterize_adjustment() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -620,6 +676,13 @@ fn posterize_adjustment() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -688,6 +751,13 @@ fn gradient_map_adjustment() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -723,6 +793,13 @@ fn gradient_map_adjustment() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -787,6 +864,13 @@ fn blend_if_hides_bright_source() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -822,6 +906,13 @@ fn blend_if_hides_bright_source() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -899,6 +990,13 @@ fn clipping_mask_gates_by_base_alpha() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
         LayerDraw {
             id: l1,
@@ -934,6 +1032,13 @@ fn clipping_mask_gates_by_base_alpha() {
             grad_color1: [0.0; 4],
             grad_angle: 0.0,
             grad_opacity: 0.0,
+            has_bevel: false,
+            bevel_highlight: [0.0; 4],
+            bevel_shadow: [0.0; 4],
+            bevel_size: 0.0,
+            bevel_soften: 0.0,
+            bevel_angle: 0.0,
+            bevel_altitude: 0.0,
         },
     ];
     let pp = gpu.composite_now(&device, &queue, &order);
@@ -1027,6 +1132,13 @@ fn channel_save_load_roundtrip() {
         grad_color1: [0.0; 4],
         grad_angle: 0.0,
         grad_opacity: 0.0,
+        has_bevel: false,
+        bevel_highlight: [0.0; 4],
+        bevel_shadow: [0.0; 4],
+        bevel_size: 0.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,
+        bevel_altitude: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
@@ -1104,6 +1216,13 @@ fn layer_stroke_outlines_edge() {
         grad_color1: [0.0; 4],
         grad_angle: 0.0,
         grad_opacity: 0.0,
+        has_bevel: false,
+        bevel_highlight: [0.0; 4],
+        bevel_shadow: [0.0; 4],
+        bevel_size: 0.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,
+        bevel_altitude: 0.0,
     }];
     let pp = gpu.composite_now(&device, &queue, &order);
     let edge = gpu.read_composite_pixel(&device, &queue, pp, 5, 8).unwrap(); // just left of square
@@ -1182,6 +1301,13 @@ fn layer_drop_shadow_offsets_behind() {
         grad_color1: [0.0; 4],
         grad_angle: 0.0,
         grad_opacity: 0.0,
+        has_bevel: false,
+        bevel_highlight: [0.0; 4],
+        bevel_shadow: [0.0; 4],
+        bevel_size: 0.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,
+        bevel_altitude: 0.0,
     }];
     let pp = gpu.composite_now(&device, &queue, &order);
     // (12,12): square shifted +4 lands here, outside the square itself.
@@ -1244,6 +1370,13 @@ fn layer_color_overlay_recolors() {
         grad_color1: [0.0; 4],
         grad_angle: 0.0,
         grad_opacity: 0.0,
+        has_bevel: false,
+        bevel_highlight: [0.0; 4],
+        bevel_shadow: [0.0; 4],
+        bevel_size: 0.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,
+        bevel_altitude: 0.0,
     }];
     let pp = gpu.composite_now(&device, &queue, &order);
     let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
@@ -1307,6 +1440,13 @@ fn layer_mask_hides() {
         grad_color1: [0.0; 4],
         grad_angle: 0.0,
         grad_opacity: 0.0,
+        has_bevel: false,
+        bevel_highlight: [0.0; 4],
+        bevel_shadow: [0.0; 4],
+        bevel_size: 0.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,
+        bevel_altitude: 0.0,
     }];
     let p = gpu.composite_now(&device, &queue, &order);
     let left = gpu.read_composite_pixel(&device, &queue, p, 1, 4).unwrap();
@@ -1460,4 +1600,64 @@ fn layer_gradient_overlay_ramps_across() {
         "gradient overlay dark on the left: left={left:?} right={right:?}"
     );
     assert!(right[0] > 0.7, "gradient overlay bright on the right: {right:?}");
+}
+
+// Bevel & Emboss (Inner Bevel): a gray square lit from the +x side (angle 0)
+// reads a bright highlight on its light-facing (right) edge and a dark shadow on
+// the opposite (left) edge, while the flat interior is unchanged.
+#[test]
+fn layer_bevel_lights_facing_edge() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping layer_bevel_lights_facing_edge");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(16, 16);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    // A mid-gray 8x8 square at x4..12, y4..12 so the bevel band has room to read.
+    let mut buf = Vec::new();
+    for y in 0..16 {
+        for x in 0..16 {
+            let px = if (4..12).contains(&x) && (4..12).contains(&y) {
+                [0.5f32, 0.5, 0.5, 1.0]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            };
+            for &c in &px {
+                buf.extend_from_slice(&half::f16::from_f32(c).to_le_bytes());
+            }
+        }
+    }
+    gpu.upload_layer(&queue, l0, &buf);
+
+    let order = vec![LayerDraw {
+        has_bevel: true,
+        bevel_highlight: [1.0, 1.0, 1.0, 1.0], // white highlight
+        bevel_shadow: [0.0, 0.0, 0.0, 1.0],    // black shadow
+        bevel_size: 2.0 / 16.0,
+        bevel_soften: 0.0,
+        bevel_angle: 0.0,                      // light from +x (right)
+        bevel_altitude: std::f32::consts::FRAC_PI_6, // 30°
+        ..base_draw(l0)
+    }];
+    let pp = gpu.composite_now(&device, &queue, &order);
+    // Interior edge pixels just inside the left and right borders, mid-height.
+    let right = gpu.read_composite_pixel(&device, &queue, pp, 10, 8).unwrap();
+    let left = gpu.read_composite_pixel(&device, &queue, pp, 5, 8).unwrap();
+    let core = gpu.read_composite_pixel(&device, &queue, pp, 8, 8).unwrap();
+    let outside = gpu.read_composite_pixel(&device, &queue, pp, 1, 1).unwrap();
+    assert!(
+        right[0] > core[0] && right[0] > left[0],
+        "light-facing (right) edge brightened: right={right:?} core={core:?} left={left:?}"
+    );
+    assert!(
+        left[0] < core[0],
+        "shadowed (left) edge darkened: left={left:?} core={core:?}"
+    );
+    assert!(
+        outside[3] < 0.1,
+        "bevel never paints outside the shape: {outside:?}"
+    );
 }
