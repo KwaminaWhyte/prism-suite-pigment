@@ -1,8 +1,11 @@
 use super::*;
 
 impl PigmentApp {
-    /// Fill the active layer with a foreground→transparent linear gradient,
-    /// composited over its existing pixels.
+    /// Fill the active layer with the editor's multi-stop gradient (color +
+    /// opacity stops, geometry type, dithering), driven by the drag `p0→p1`
+    /// (doc px), composited over the layer's existing pixels and clipped to the
+    /// active selection when one exists. The gradient math is the shared,
+    /// app-agnostic `prism_core::gradient`.
     pub(crate) fn do_gradient(
         &mut self,
         frame: &mut eframe::Frame,
@@ -11,14 +14,17 @@ impl PigmentApp {
     ) {
         let (w, h) = (self.doc.size.width, self.doc.size.height);
         let active = self.active_id();
-        let c = self.brush_color;
-        let c0 = [
-            srgb_to_linear(c.r() as f32 / 255.0),
-            srgb_to_linear(c.g() as f32 / 255.0),
-            srgb_to_linear(c.b() as f32 / 255.0),
-            1.0,
-        ];
-        let grad = shape::linear_gradient((p0.x, p0.y), (p1.x, p1.y), c0, [0.0; 4], w, h);
+        // Build the gradient in linear working space (premultiplied output).
+        let grad = self
+            .gradient
+            .to_core()
+            .render((p0.x, p0.y), (p1.x, p1.y), w, h);
+        // Optional selection clip (canvas-sized 0..1 mask).
+        let sel = if self.selection_active {
+            Some(self.read_selection(frame))
+        } else {
+            None
+        };
         with_gpu(frame, |gpu, d, q| {
             gpu.begin_command_now(d, q, active, "Gradient");
             let Some(b) = gpu.read_layer(d, q, active) else {
@@ -26,9 +32,12 @@ impl PigmentApp {
             };
             let mut base = f16_bytes_to_f32(&b);
             for i in 0..(w * h) as usize {
-                let ga = grad[i * 4 + 3];
+                let clip = sel.as_ref().map(|s| s[i]).unwrap_or(1.0);
+                // Source-over with the gradient (already premultiplied), scaled
+                // by the selection coverage.
+                let ga = grad[i * 4 + 3] * clip;
                 for c in 0..4 {
-                    base[i * 4 + c] = grad[i * 4 + c] + base[i * 4 + c] * (1.0 - ga);
+                    base[i * 4 + c] = grad[i * 4 + c] * clip + base[i * 4 + c] * (1.0 - ga);
                 }
             }
             gpu.upload_layer(q, active, &f32_to_f16_bytes(&base));

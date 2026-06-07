@@ -227,7 +227,7 @@ pigment/
 - [ ] Boolean shape ops (`i_overlay`): unite / subtract / intersect / exclude on selected shapes / paths
 - [ ] Clipping masks (layer clipped to one below — **done**, see Phase 7) + group/nested masks
 - [x] Curves adjustment **UI** (draggable monotone-cubic editor; composite **+ per-channel R/G/B** curves; LUT uploaded as a 256×1 texture, sampled in the compositor; GPU-pixel-tested)
-- [ ] Gradient editor: multi-stop, opacity stops, linear/radial/angle/reflected/diamond types, dithering; saved presets
+- [x] Gradient editor: multi-stop **color rail + independent opacity rail**, all five geometries (**linear/radial/angle/reflected/diamond**), and **ordered (Bayer) dithering** to kill banding; built-in **presets** (Foreground→Transparent, Black→White, Spectrum, Sunset). The gradient tool drag defines the axis (`start→end`, each geometry reinterprets it); a "fill layer" toggle fills the whole layer without dragging. Selection-clipped, source-over onto the active layer, region-COW undo. Sampling/interpolation/dither math is the shared, app-agnostic `prism_core::gradient` (working-space multi-stop lerp, premultiplied output); the app converts sRGB editor stops → linear. Gradient fills persist to `.pigment` as layer pixels (no format change); the shared `Gradient` is serde-ready for embedding presets later. Unit-tested (stop interp incl. unsorted/multi-stop, opacity rail, every geometry's parameterization, seeded-deterministic dither) + serde round-trip + GPU pixel test. *Still:* on-canvas stop handles, reverse, noise gradients, `.grd` import.
 - [ ] Pattern fill / pattern stamp + define-pattern from selection
 - [ ] **Type richness:** character + paragraph panels (kerning/tracking/leading, OpenType features, justification), text-on-path, warp text, type masks
 - [ ] **Smart objects** (big — see Phase 7): embedded + linked; non-destructive transform/filter; "edit contents" reopens source; place `.pigment`/`.contour`/image as smart object
@@ -386,7 +386,7 @@ intentionally a sibling-app concern. Target ≥85% of the *weighted, real-world-
 | Deep vector authoring | — | **Won't** (Contour) | — |
 
 ### Cross-cutting (every phase)
-- [x] Tests: core unit (color/blend/tile/fill/raster/curve/histogram/shape), io round-trips, headless-GPU pixel assertions (compositor/wet/undo/selection/transform/adjust/mask) — 58 total
+- [x] Tests: core unit (color/blend/tile/fill/raster/curve/histogram/shape/gradient), io round-trips, headless-GPU pixel assertions (compositor/wet/undo/selection/transform/adjust/mask/gradient-fill)
 - [x] CI: `fmt --check` + `clippy` (-D warnings, all-targets) + `test` on linux/macos/windows (`.github/workflows/ci.yml`); workspace is rustfmt-clean + clippy-clean
 - [ ] Input mapping/shortcuts config; preferences
 - [ ] Crash recovery / autosave; error surfacing
@@ -438,7 +438,7 @@ adjustments) deliver the most felt parity per unit effort** — do them first. P
 
 Highest felt-parity-per-effort first. Pick up from the Phase-4 completion tasks, then Phase 6/7.
 
-1. [ ] **Finish Phase 4** — pen tool (kurbo handles), Curves UI, multi-stop gradient editor, rich type. Unblocks vector masks (Ph7) and Camera-Raw curve (Ph9).
+1. [ ] **Finish Phase 4** — pen tool (kurbo handles), ~~Curves UI~~ (done), ~~multi-stop gradient editor~~ (done), rich type. Unblocks vector masks (Ph7) and Camera-Raw curve (Ph9).
 2. [ ] **Phase 6 retouch core** — Clone Stamp → Healing Brush (Poisson) → Spot Healing → Patch → Content-Aware Fill (PatchMatch). This is the biggest single "feels like Photoshop" jump.
 3. [ ] **Phase 7 layer power** — Layer styles (FX passes), Smart Objects + Smart Filters, clipping/vector masks, Channels panel, remaining adjustments. Turns it into a non-destructive pro tool.
 4. [ ] **Phase 8/9 in parallel where possible** — filter galleries via `prism-fx`; color management (`lcms2`) + RAW (`rawler`) + PSD-write + Export-As. End of 9 = the ≥85% line.

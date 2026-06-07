@@ -7,6 +7,33 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Gradient editor / gradient fill** (Phase 4 completion). The gradient tool is
+  now a full multi-stop gradient editor: an independent **color rail** and
+  **opacity rail** (Photoshop's two-rail model — add/remove/position color stops
+  and opacity stops separately), all five **gradient geometries** (Linear,
+  Radial, Angle, Reflected, Diamond), and **ordered dithering** to suppress 8-bit
+  banding. A drag defines the gradient axis (`start→end`) which every geometry
+  reinterprets (radial uses the drag length as the radius, diamond as the
+  half-extent, angle as the reference direction, etc.); a **"fill layer"** toggle
+  + button fills the whole layer across the canvas without dragging. Fills are
+  clipped to the active selection and composited source-over onto the active
+  layer (region-COW undo, like every other fill). Built-in **presets**
+  (Foreground→Transparent, Black→White, Spectrum, Sunset) seed the editor. The
+  gradient sampling/rasterization/dither math lives in the shared, app-agnostic
+  `prism_core::gradient` (multi-stop interpolation in the working/linear space,
+  premultiplied output matching `shape.rs`); the app converts the editor's sRGB
+  stops to linear at fill time. Because the fill writes pixels directly (the
+  established CPU fill path), gradient fills **persist to `.pigment`** as layer
+  pixels with no format change; the shared `Gradient` type is also serde-ready
+  (serialized round-trip tested in prism-io) so saved gradient presets/fills can
+  be embedded later. Tests: 18 new `prism-core` unit tests (stop interpolation in
+  the working space incl. multi-stop and unsorted stops, independent opacity
+  rail, each geometry's parameterization, seeded/deterministic dither + presence
+  + average-preservation, premultiplied render, id/zero-dim edge cases), 1 new
+  prism-io serde round-trip, 3 new app editor tests (sRGB→linear conversion,
+  preset load), and 1 new headless-GPU pixel test (read→render→upload gradient
+  fill across a real f16 layer). *Still open:* on-canvas draggable stop handles,
+  per-effect blend/reverse, noise gradients, `.grd` import.
 - **Adjustment layers persist to `.pigment`** (Phase 7). Closes a known
   data-loss gap: adjustment layers were runtime-only — saving and reopening a
   document silently dropped every adjustment layer's parameters (and the

@@ -14,6 +14,11 @@ impl eframe::App for PigmentApp {
             self.force_composite = true;
         }
 
+        // A "fill layer with gradient" request from the gradient editor button.
+        if let Some((p0, p1)) = self.grad_fill_pending.take() {
+            self.do_gradient(frame, p0, p1);
+        }
+
         // Dynamic-Link: poll linked `.contour` sources every frame. When a link
         // exists, keep the UI repainting (egui idles otherwise) so the mtime
         // poll actually runs and the layer tracks its vector source live.
@@ -271,6 +276,9 @@ impl eframe::App for PigmentApp {
                                 .text("tolerance"),
                         );
                         ui.checkbox(&mut self.fill_contiguous, "contiguous");
+                    }
+                    if self.tool == Tool::Gradient {
+                        self.gradient_options_ui(ui);
                     }
                     if matches!(self.tool, Tool::Fill | Tool::Eyedropper) {
                         ui.checkbox(&mut self.sample_all, "sample all layers");

@@ -289,6 +289,11 @@ pub struct PigmentApp {
     gen_fp: HashMap<LayerId, u64>,
     shape_drag: Option<LayerId>,
     grad_start: Option<egui::Vec2>,
+    /// Multi-stop gradient editor state (stops, geometry, dither, presets).
+    gradient: gradient::GradientEditor,
+    /// A "fill layer with gradient" request (start→end axis in doc px), applied
+    /// on the next frame so the GPU readback/upload runs with `frame` in hand.
+    grad_fill_pending: Option<(egui::Vec2, egui::Vec2)>,
 
     // Dynamic-Link: layers placed from a `.contour` file with a live link. Each
     // frame we stat the source file; a newer mtime triggers a re-rasterize +
@@ -400,6 +405,8 @@ impl PigmentApp {
             gen_fp: HashMap::new(),
             shape_drag: None,
             grad_start: None,
+            gradient: gradient::GradientEditor::default(),
+            grad_fill_pending: None,
             linked_contours: HashMap::new(),
         }
     }
@@ -407,6 +414,7 @@ impl PigmentApp {
 
 mod adjustments;
 mod edit;
+mod gradient;
 mod io;
 mod retouch;
 mod state;
