@@ -7,6 +7,22 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Layer styles persist to `.pigment`** (Phase 7). Closes a known data-loss
+  gap: the 8 non-destructive layer styles (Stroke, Drop Shadow, Color Overlay,
+  Inner Shadow, Outer Glow, Inner Glow, Gradient Overlay, Bevel & Emboss) were
+  runtime-only — saving and reopening a document silently dropped them. They now
+  round-trip. The `.pigment` doc model (`prism-io::document_file`) gains an
+  optional, per-layer `styles` payload (`Option<LayerStyles>` with one optional
+  struct per style, units documented: colors as straight RGBA/RGB, pixel
+  offsets/sizes/blur in document px, angles in degrees), serialized with serde
+  `default` + `skip_serializing_if` so **old documents (no `styles` key) still
+  load** and **new documents with no styles stay byte-compact** (no empty keys).
+  On save Pigment maps each layer's runtime style HashMaps into `LayerMeta.styles`;
+  on open it re-installs them under the freshly-allocated layer ids and forces a
+  recomposite so restored styles render immediately. Pure mapping functions
+  (`runtime_styles_to_meta` / `meta_styles_to_runtime`) are unit-tested for a
+  full 8-style lossless round-trip (GPU upload untested per convention); prism-io
+  adds tests for a full-payload serde round-trip and old-doc back-compat.
 - **Pen tool + work paths, path → selection, vector mask** (Phase 4 completion).
   A cubic-Bézier **pen**: click to drop corner anchors, click-drag to pull
   symmetric Bézier handles, and click the first anchor (within 8 screen px,

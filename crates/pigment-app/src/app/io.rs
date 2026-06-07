@@ -1,6 +1,156 @@
 use super::*;
 
+/// Runtime per-layer style maps, gathered for one layer, in the tuple shapes
+/// used by `PigmentApp`'s style HashMaps. Used purely as the pure-function
+/// boundary between the runtime maps and the serializable `LayerStyles` model so
+/// the mapping can be unit-tested without a live app/GPU.
+#[allow(clippy::type_complexity)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RuntimeLayerStyles {
+    pub stroke: Option<([f32; 4], f32)>,
+    pub drop_shadow: Option<([f32; 4], [f32; 2], f32)>,
+    pub color_overlay: Option<[f32; 4]>,
+    pub inner_shadow: Option<([f32; 4], [f32; 2], f32)>,
+    pub outer_glow: Option<([f32; 4], f32)>,
+    pub inner_glow: Option<([f32; 4], f32)>,
+    pub grad_overlay: Option<([f32; 4], [f32; 4], f32, f32)>,
+    pub bevel: Option<([f32; 4], [f32; 4], f32, f32, f32, f32)>,
+}
+
+impl RuntimeLayerStyles {
+    fn is_empty(&self) -> bool {
+        self.stroke.is_none()
+            && self.drop_shadow.is_none()
+            && self.color_overlay.is_none()
+            && self.inner_shadow.is_none()
+            && self.outer_glow.is_none()
+            && self.inner_glow.is_none()
+            && self.grad_overlay.is_none()
+            && self.bevel.is_none()
+    }
+}
+
+/// Map the runtime per-layer style tuples to the serializable `.pigment`
+/// `LayerStyles` model. Returns `None` when the layer carries no styles so the
+/// document stays compact. Pure: no app/GPU state.
+pub(crate) fn runtime_styles_to_meta(rt: &RuntimeLayerStyles) -> Option<LayerStyles> {
+    if rt.is_empty() {
+        return None;
+    }
+    Some(LayerStyles {
+        stroke: rt.stroke.map(|(color, width_px)| StrokeStyle { color, width_px }),
+        drop_shadow: rt.drop_shadow.map(|(color, offset_px, blur_px)| ShadowStyle {
+            color,
+            offset_px,
+            blur_px,
+        }),
+        color_overlay: rt.color_overlay.map(|color| ColorOverlayStyle { color }),
+        inner_shadow: rt.inner_shadow.map(|(color, offset_px, blur_px)| ShadowStyle {
+            color,
+            offset_px,
+            blur_px,
+        }),
+        outer_glow: rt.outer_glow.map(|(color, size_px)| GlowStyle { color, size_px }),
+        inner_glow: rt.inner_glow.map(|(color, size_px)| GlowStyle { color, size_px }),
+        gradient_overlay: rt
+            .grad_overlay
+            .map(|(color0, color1, angle_deg, opacity)| GradientOverlayStyle {
+                color0,
+                color1,
+                angle_deg,
+                opacity,
+            }),
+        bevel: rt
+            .bevel
+            .map(|(highlight, shadow, size_px, soften_px, angle_deg, altitude_deg)| BevelStyle {
+                highlight,
+                shadow,
+                size_px,
+                soften_px,
+                angle_deg,
+                altitude_deg,
+            }),
+    })
+}
+
+/// Inverse of `runtime_styles_to_meta`: map a serialized `LayerStyles` back to
+/// the runtime tuple shapes. Pure: no app/GPU state.
+pub(crate) fn meta_styles_to_runtime(styles: &LayerStyles) -> RuntimeLayerStyles {
+    RuntimeLayerStyles {
+        stroke: styles.stroke.map(|s| (s.color, s.width_px)),
+        drop_shadow: styles.drop_shadow.map(|s| (s.color, s.offset_px, s.blur_px)),
+        color_overlay: styles.color_overlay.map(|s| s.color),
+        inner_shadow: styles.inner_shadow.map(|s| (s.color, s.offset_px, s.blur_px)),
+        outer_glow: styles.outer_glow.map(|s| (s.color, s.size_px)),
+        inner_glow: styles.inner_glow.map(|s| (s.color, s.size_px)),
+        grad_overlay: styles
+            .gradient_overlay
+            .map(|s| (s.color0, s.color1, s.angle_deg, s.opacity)),
+        bevel: styles
+            .bevel
+            .map(|s| (s.highlight, s.shadow, s.size_px, s.soften_px, s.angle_deg, s.altitude_deg)),
+    }
+}
+
 impl PigmentApp {
+    /// Gather a layer's runtime styles from the per-style HashMaps into one
+    /// bundle (the pure-function input for `.pigment` serialization).
+    pub(crate) fn collect_runtime_styles(&self, id: LayerId) -> RuntimeLayerStyles {
+        RuntimeLayerStyles {
+            stroke: self.layer_strokes.get(&id).copied(),
+            drop_shadow: self.layer_shadows.get(&id).copied(),
+            color_overlay: self.layer_overlays.get(&id).copied(),
+            inner_shadow: self.layer_inner_shadows.get(&id).copied(),
+            outer_glow: self.layer_outer_glows.get(&id).copied(),
+            inner_glow: self.layer_inner_glows.get(&id).copied(),
+            grad_overlay: self.layer_grad_overlays.get(&id).copied(),
+            bevel: self.layer_bevels.get(&id).copied(),
+        }
+    }
+
+    /// Insert a bundle of runtime styles into the per-style HashMaps for `id`.
+    /// `None` entries leave the corresponding map untouched (callers clear maps
+    /// before a load so absent styles do not linger from a previous document).
+    pub(crate) fn install_runtime_styles(&mut self, id: LayerId, rt: &RuntimeLayerStyles) {
+        if let Some(v) = rt.stroke {
+            self.layer_strokes.insert(id, v);
+        }
+        if let Some(v) = rt.drop_shadow {
+            self.layer_shadows.insert(id, v);
+        }
+        if let Some(v) = rt.color_overlay {
+            self.layer_overlays.insert(id, v);
+        }
+        if let Some(v) = rt.inner_shadow {
+            self.layer_inner_shadows.insert(id, v);
+        }
+        if let Some(v) = rt.outer_glow {
+            self.layer_outer_glows.insert(id, v);
+        }
+        if let Some(v) = rt.inner_glow {
+            self.layer_inner_glows.insert(id, v);
+        }
+        if let Some(v) = rt.grad_overlay {
+            self.layer_grad_overlays.insert(id, v);
+        }
+        if let Some(v) = rt.bevel {
+            self.layer_bevels.insert(id, v);
+        }
+    }
+
+    /// Remove all per-layer styles (used before loading a new document so styles
+    /// from the previous document do not bleed onto re-allocated layer ids).
+    pub(crate) fn clear_all_layer_styles(&mut self) {
+        self.layer_strokes.clear();
+        self.layer_shadows.clear();
+        self.layer_overlays.clear();
+        self.layer_inner_shadows.clear();
+        self.layer_outer_glows.clear();
+        self.layer_inner_glows.clear();
+        self.layer_grad_overlays.clear();
+        self.layer_bevels.clear();
+    }
+
     pub(crate) fn open_image(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Images", prism_io::SUPPORTED_EXTENSIONS)
@@ -39,7 +189,12 @@ impl PigmentApp {
         let size = Size::new(meta.width, meta.height);
         let mut doc = Document::new(size);
         doc.layers.layers.clear();
+        // Layers are re-allocated fresh ids on load, so styles keyed by the old
+        // (saved) ids must be re-installed under the new ids. Clear first so a
+        // previous document's styles don't bleed onto re-used ids.
+        self.clear_all_layer_styles();
         let mut staged = Vec::new();
+        let mut loaded_styles: Vec<(LayerId, RuntimeLayerStyles)> = Vec::new();
         for (i, lm) in meta.layers.iter().enumerate() {
             let id = doc.layers.alloc_id();
             let mut layer = Layer::raster(id, lm.name.clone());
@@ -49,6 +204,9 @@ impl PigmentApp {
             doc.layers.layers.push(layer);
             let bytes = pixels.get(i).map(|p| p.rgba16f.clone()).unwrap_or_default();
             staged.push((id, bytes));
+            if let Some(styles) = &lm.styles {
+                loaded_styles.push((id, meta_styles_to_runtime(styles)));
+            }
         }
         self.background_id = doc
             .layers
@@ -58,11 +216,17 @@ impl PigmentApp {
             .unwrap_or(LayerId(0));
         doc.active_layer = doc.layers.layers.last().map(|l| l.id);
         self.doc = doc;
+        for (id, rt) in &loaded_styles {
+            self.install_runtime_styles(*id, rt);
+        }
         self.pending = Some(PendingUpload {
             size,
             layers: staged,
         });
         self.needs_fit = true;
+        // Loaded styles change the layer fingerprint; force a recomposite so the
+        // restored styles render on the next frame.
+        self.force_composite = true;
     }
 
     pub(crate) fn open_psd(&mut self) {
@@ -320,6 +484,7 @@ impl PigmentApp {
                     blend: l.blend.shader_id(),
                     opacity: l.opacity,
                     visible: l.visible,
+                    styles: runtime_styles_to_meta(&self.collect_runtime_styles(l.id)),
                 })
                 .collect(),
         };
@@ -435,5 +600,76 @@ impl PigmentApp {
         let mask_b = flood_fill_mask(&buf, w, h, seed.0, seed.1, tol, contiguous);
         let mask: Vec<f32> = mask_b.iter().map(|&b| if b { 1.0 } else { 0.0 }).collect();
         self.commit_selection(frame, mask);
+    }
+}
+
+#[cfg(test)]
+mod style_persist_tests {
+    use super::*;
+
+    /// A runtime style bundle carrying all 8 layer styles round-trips through the
+    /// serializable `LayerStyles` model (the save→load mapping the .pigment IO
+    /// uses) reproducing every param. GPU upload is intentionally untested.
+    #[test]
+    fn all_eight_styles_round_trip_through_meta() {
+        let rt = RuntimeLayerStyles {
+            stroke: Some(([0.1, 0.2, 0.3, 1.0], 4.5)),
+            drop_shadow: Some(([0.0, 0.0, 0.0, 0.75], [5.0, -3.0], 8.0)),
+            color_overlay: Some([0.8, 0.1, 0.1, 0.6]),
+            inner_shadow: Some(([0.05, 0.05, 0.05, 0.5], [-2.0, 2.0], 3.0)),
+            outer_glow: Some(([1.0, 0.9, 0.2, 0.8], 12.0)),
+            inner_glow: Some(([0.2, 0.9, 1.0, 0.7], 6.0)),
+            grad_overlay: Some(([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0], 45.0, 0.9)),
+            bevel: Some(([1.0, 1.0, 1.0, 0.75], [0.0, 0.0, 0.0, 0.75], 5.0, 2.0, 120.0, 30.0)),
+        };
+
+        // Forward: runtime -> meta -> JSON (the on-save path).
+        let meta = runtime_styles_to_meta(&rt).expect("non-empty styles produce Some");
+        let json = serde_json::to_string(&meta).expect("serialize LayerStyles");
+
+        // Back: JSON -> meta -> runtime (the on-load path).
+        let back_meta: LayerStyles = serde_json::from_str(&json).expect("deserialize LayerStyles");
+        let back = meta_styles_to_runtime(&back_meta);
+
+        assert_eq!(rt, back, "all 8 styles must round-trip losslessly");
+    }
+
+    /// A layer with no styles maps to `None`, so it serializes without a styles
+    /// key and re-installing produces no map entries.
+    #[test]
+    fn empty_styles_map_to_none() {
+        let rt = RuntimeLayerStyles::default();
+        assert!(runtime_styles_to_meta(&rt).is_none());
+    }
+
+    /// install_runtime_styles writes exactly the present styles into the HashMaps,
+    /// keyed by the (possibly re-allocated) layer id — the on-load installation.
+    #[test]
+    fn install_writes_present_styles_only() {
+        let styles = LayerStyles {
+            stroke: Some(StrokeStyle {
+                color: [0.4, 0.5, 0.6, 1.0],
+                width_px: 7.0,
+            }),
+            bevel: Some(BevelStyle {
+                highlight: [1.0, 1.0, 1.0, 0.5],
+                shadow: [0.0, 0.0, 0.0, 0.5],
+                size_px: 9.0,
+                soften_px: 1.0,
+                angle_deg: 90.0,
+                altitude_deg: 45.0,
+            }),
+            ..Default::default()
+        };
+        let rt = meta_styles_to_runtime(&styles);
+        assert_eq!(rt.stroke, Some(([0.4, 0.5, 0.6, 1.0], 7.0)));
+        assert_eq!(
+            rt.bevel,
+            Some(([1.0, 1.0, 1.0, 0.5], [0.0, 0.0, 0.0, 0.5], 9.0, 1.0, 90.0, 45.0))
+        );
+        // The unset styles stay None.
+        assert!(rt.drop_shadow.is_none());
+        assert!(rt.color_overlay.is_none());
+        assert!(rt.grad_overlay.is_none());
     }
 }

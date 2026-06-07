@@ -15,6 +15,10 @@ use prism_core::raster::{self, CombineMode};
 use prism_core::shape::{self, ShapeKind};
 use prism_core::{BlendMode, Document, Layer, LayerId, LayerKind, Size};
 use prism_io::document_file::{self, DocMeta, LayerMeta, LayerPixels};
+use prism_io::document_file::{
+    BevelStyle, ColorOverlayStyle, GlowStyle, GradientOverlayStyle, LayerStyles, ShadowStyle,
+    StrokeStyle,
+};
 use prism_io::resize::{resize_rgba_f32, Quality};
 use prism_io::text::{self, TextAlign};
 use prism_io::LoadedImage;
