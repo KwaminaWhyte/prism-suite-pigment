@@ -221,10 +221,11 @@ pigment/
 - [x] **DoD (partial):** text + vector editable after creation ✓; smart objects deferred
 
 **Phase 4 completion tasks (promote from "deferred" — needed for parity):**
-- [ ] Pen tool: `kurbo` `BezPath` with draggable anchor/handle UI; add/delete/convert points; rubber-band preview
-- [ ] More shapes: polygon, line, rounded-rect (live corner radius), custom-shape from path; shape stroke + fill + dashes
-- [ ] Boolean shape ops (`i_overlay`): unite / subtract / intersect / exclude on selected shapes
-- [ ] Vector masks (path clips a layer; composite multiplies α by rasterized path coverage) + clipping masks (layer clipped to one below) + group masks
+- [x] Pen tool: cubic-Bézier work paths — click to add corner anchors, click-drag for symmetric handles, click first anchor to close; **Direct Select** tool moves anchors/handles afterward; rubber-band preview drawn as an egui painter overlay (not GPU). In-app Bézier math (`path.rs`), no `kurbo` dep this pass. *Still:* add/delete/convert-point editing, multi-subpath, path persistence to the doc.
+- [x] **Path → selection** (flatten the closed path interior → selection mask, reusing the lasso/marquee selection pipeline) **and vector mask** (rasterize path interior → active-layer mask via the existing `set_mask` layer-mask pipeline). Both exposed in the pen tool-options bar. *Still:* live (non-destructive) vector masks that re-clip when the path edits; mask density/feather.
+- [ ] More shapes: polygon, line, rounded-rect (live corner radius), custom-shape from path; shape stroke + fill + dashes; **shape layers from a pen path**
+- [ ] Boolean shape ops (`i_overlay`): unite / subtract / intersect / exclude on selected shapes / paths
+- [ ] Clipping masks (layer clipped to one below — **done**, see Phase 7) + group/nested masks
 - [x] Curves adjustment **UI** (draggable monotone-cubic editor; composite **+ per-channel R/G/B** curves; LUT uploaded as a 256×1 texture, sampled in the compositor; GPU-pixel-tested)
 - [ ] Gradient editor: multi-stop, opacity stops, linear/radial/angle/reflected/diamond types, dithering; saved presets
 - [ ] Pattern fill / pattern stamp + define-pattern from selection
@@ -273,7 +274,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 - [~] **Layer styles / FX** (L): **Stroke + Drop Shadow + Color Overlay + Inner Shadow + Outer Glow + Inner Glow + Gradient Overlay + Bevel & Emboss done** — non-destructive, evaluated live in the composite shader: outer stroke (alpha-edge ring), drop shadow (blurred/offset/tinted alpha behind), color overlay (recolor covered pixels by strength), inner shadow (blurred/offset *inverse*-alpha clipped inside the shape), outer glow (centered soft alpha halo outward), inner glow (soft alpha tint inward from the edge), gradient overlay (angled two-color linear gradient over the fill), **bevel & emboss (Inner Bevel)** — screen-space normal from the alpha height field, directional light (angle + altitude), highlight on the light-facing edge / shadow on the opposite edge concentrated within *size* (no separate height pass); per-layer params, GPU pixel-tested (8 style tests total). *Still:* **Satin**, **Pattern Overlay**; Outer Bevel / Emboss / Pillow-emboss variants; per-effect blend/opacity; copy/paste/scale styles.
 - [ ] **Smart Objects** (L): embedded + linked; wrap any layer/selection; transforms & filters re-applied non-destructively to the source render; "edit contents" → child document; replace-contents; place external (`.pigment`/`.contour`/image/PDF/Pulse-comp via Dynamic Link)
 - [ ] **Smart Filters** (M): any Phase-6/8 filter applied to a smart object stays editable, re-orderable, masked, toggle-able
-- [~] **Clipping masks** (S) **done** — a layer clips to the alpha of the layer directly below, gated in the composite shader (clip-base texture binding); per-layer toggle + GPU pixel test. *Still:* **vector masks** (M, from Phase 4 pen), **group/nested masks**, mask density/feather, mask panel.
+- [~] **Clipping masks** (S) **done** — a layer clips to the alpha of the layer directly below, gated in the composite shader (clip-base texture binding); per-layer toggle + GPU pixel test. **Vector masks** (from Phase 4 pen) **done** — a closed work path rasterizes into the active layer's mask via the existing layer-mask pipeline. *Still:* live (re-clipping) vector masks, **group/nested masks**, mask density/feather, mask panel.
 - [~] **Blend-If / advanced blending** (M): **done** — this-layer + underlying-layer gray-range gating with soft-feathered ranges, evaluated in the composite shader (the backdrop is already bound); per-layer sliders + GPU pixel test. *Still:* per-channel split sliders, fill-vs-opacity, knockout, blend-interior effects.
 - [~] **Channels panel** (M): **done** — alpha channels (save the current selection as a named channel; load a channel back into the selection; delete), GPU round-trip-tested. *Still:* view/edit per-channel RGB, spot channels, split/merge channels.
 - [ ] **Layer comps** (S): named snapshots of visibility/position/appearance
@@ -371,7 +372,7 @@ intentionally a sibling-app concern. Target ≥85% of the *weighted, real-world-
 | Smart objects / smart filters | none yet | **Planned** | 7 |
 | Channels / alpha / spot | none yet | **Planned** | 7 |
 | Text | basic editable; rich type/OpenType/on-path/warp | **Done** basic; rest **Planned** | 4 |
-| Vector / shapes / pen | rect/ellipse done; pen/bool/custom | **Done** basic; rest **Planned** | 4 |
+| Vector / shapes / pen | rect/ellipse + pen (work paths, path→sel, vector mask) done; bool/custom/shape-layers | **Done** basic; rest **Planned** | 4 |
 | Color mgmt / ICC / CMYK / soft-proof | none (sRGB/linear today) | **Planned** | 9 |
 | RAW / Camera Raw | none | **Planned** | 9 |
 | Import: PNG/JPEG/…/PSD/EXR/HDR | yes | **Done** | 5 |

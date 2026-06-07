@@ -7,6 +7,24 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Pen tool + work paths, path → selection, vector mask** (Phase 4 completion).
+  A cubic-Bézier **pen**: click to drop corner anchors, click-drag to pull
+  symmetric Bézier handles, and click the first anchor (within 8 screen px,
+  ≥ 3 anchors) to **close** the path. A companion **Direct Select** tool grabs
+  on-curve points (moves the whole anchor) or individual handles to reshape the
+  curve after the fact. The work path renders as a vector **overlay** via the
+  egui painter (flattened curve + anchor dots + handle lines/rings) — it is *not*
+  part of the GPU composite. From the tool-options bar: **Path → selection**
+  flattens the closed interior and fills it into the selection mask (reusing the
+  selection pipeline, replace mode), and **Apply as vector mask** rasterizes the
+  same interior into the active layer's mask via the existing layer-mask pipeline
+  (`set_mask`). Bézier evaluation, polyline flattening, even-odd point-in-polygon
+  and interior fill all live in-app (`path.rs`, no new shared-crate dep); nine
+  unit tests cover curve evaluation, flatten-on-curve, smooth-handle mirroring,
+  point-in-polygon, and exact fill-mask coverage on a known square (= the
+  path→selection core, GPU-free). *Deferred:* shape layers from paths, boolean
+  path ops, stroking a path with a brush, and persisting paths to the `.pigment`
+  doc (doc-format change out of scope this pass).
 - **Layer style: Bevel & Emboss (Inner Bevel)** (Phase 7). The last and hardest
   of the common Photoshop layer styles, evaluated live in the compositor with no
   separate height pass. A screen-space surface normal is derived from a central

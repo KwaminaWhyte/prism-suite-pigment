@@ -83,6 +83,10 @@ pub const MOVE: &str = ph::ARROWS_OUT_CARDINAL;
 pub const CROP: &str = ph::CROP;
 /// Free transform / scale tool.
 pub const TRANSFORM: &str = ph::ARROWS_OUT;
+/// Pen tool (cubic-Bézier work paths).
+pub const PEN: &str = ph::PEN_NIB;
+/// Direct-select tool (edit path anchors / handles).
+pub const DIRECT_SELECT: &str = ph::VECTOR_TWO;
 
 // --- Layer / panel actions --------------------------------------------------
 

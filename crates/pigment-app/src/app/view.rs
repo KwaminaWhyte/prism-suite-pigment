@@ -296,6 +296,40 @@ impl eframe::App for PigmentApp {
                         ui.selectable_value(&mut self.patch_source_mode, false, "Destination");
                         ui.label("Lasso a region, then drag it onto the texture to clone");
                     }
+                    if matches!(self.tool, Tool::Pen | Tool::DirectSelect) {
+                        ui.separator();
+                        let n = self.work_path.anchors.len();
+                        let can_fill = n >= 2;
+                        if ui
+                            .add_enabled(can_fill, egui::Button::new("Path → selection"))
+                            .clicked()
+                        {
+                            self.path_to_selection(frame);
+                        }
+                        if ui
+                            .add_enabled(can_fill, egui::Button::new("Apply as vector mask"))
+                            .clicked()
+                        {
+                            self.path_to_mask(frame);
+                        }
+                        if ui
+                            .add_enabled(n > 0, egui::Button::new("Clear path"))
+                            .clicked()
+                        {
+                            self.work_path.clear();
+                            self.pen_grab = None;
+                        }
+                        let closed = self.work_path.closed;
+                        ui.label(if self.tool == Tool::Pen {
+                            if closed {
+                                "Path closed · drag anchors with Direct Select"
+                            } else {
+                                "Click to add · drag for curves · click first anchor to close"
+                            }
+                        } else {
+                            "Drag anchors (●) or handles (○) to edit"
+                        });
+                    }
                 });
             });
         }
@@ -346,6 +380,10 @@ impl eframe::App for PigmentApp {
                                 ],
                                 &[(T::Eyedropper, icons::EYEDROPPER, "Eyedropper")],
                                 &[(T::Text, icons::TEXT, "Text")],
+                                &[
+                                    (T::Pen, icons::PEN, "Pen (work path)"),
+                                    (T::DirectSelect, icons::DIRECT_SELECT, "Direct select (edit path)"),
+                                ],
                                 &[
                                     (T::ShapeRect, icons::SHAPE, "Rectangle shape"),
                                     (T::ShapeEllipse, icons::ELLIPSE_SELECT, "Ellipse shape"),
@@ -1285,6 +1323,67 @@ impl eframe::App for PigmentApp {
                                 egui::Stroke::new(1.5, egui::Color32::WHITE),
                             ));
                         }
+                    }
+                    Tool::Pen => {
+                        // CLOSE_HIT: screen-px radius for clicking the first anchor
+                        // to close, and the doc-px radius derived from it.
+                        const CLOSE_PX: f32 = 8.0;
+                        let close_doc =
+                            CLOSE_PX / (doc_rect.width() / self.doc.size.width.max(1) as f32).max(1e-3);
+                        if response.drag_started() {
+                            // A press that turns into a drag: place an anchor, then
+                            // drag to set its symmetric Bézier handles.
+                            if let Some(p) = response.interact_pointer_pos() {
+                                let d = screen_to_doc(p, doc_rect, self.doc.size);
+                                self.pen_place_or_close(d, close_doc);
+                                self.pen_dragging = !self.work_path.closed;
+                            }
+                        }
+                        if response.dragged() {
+                            if self.pen_dragging {
+                                if let Some(p) = response.interact_pointer_pos() {
+                                    let d = screen_to_doc(p, doc_rect, self.doc.size);
+                                    if let Some(a) = self.work_path.anchors.last_mut() {
+                                        a.set_smooth_out([d.x, d.y]);
+                                    }
+                                }
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped() {
+                            self.pen_dragging = false;
+                        }
+                        // A plain click (no drag) also places a corner anchor.
+                        if response.clicked() {
+                            if let Some(p) = response.interact_pointer_pos() {
+                                let d = screen_to_doc(p, doc_rect, self.doc.size);
+                                self.pen_place_or_close(d, close_doc);
+                            }
+                        }
+                        self.draw_path_overlay(ui, doc_rect, true);
+                    }
+                    Tool::DirectSelect => {
+                        let pick_doc =
+                            8.0 / (doc_rect.width() / self.doc.size.width.max(1) as f32).max(1e-3);
+                        if response.drag_started() {
+                            if let Some(p) = response.interact_pointer_pos() {
+                                let d = screen_to_doc(p, doc_rect, self.doc.size);
+                                self.pen_grab = self.path_pick(d, pick_doc);
+                            }
+                        }
+                        if response.dragged() {
+                            if let (Some((idx, part)), Some(p)) =
+                                (self.pen_grab, response.interact_pointer_pos())
+                            {
+                                let d = screen_to_doc(p, doc_rect, self.doc.size);
+                                self.path_move_grab(idx, part, [d.x, d.y]);
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        if response.drag_stopped() {
+                            self.pen_grab = None;
+                        }
+                        self.draw_path_overlay(ui, doc_rect, true);
                     }
                     Tool::Brush | Tool::Eraser => {
                         let spacing = (self.brush_size * 0.15).max(0.75);

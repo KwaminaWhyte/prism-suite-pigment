@@ -238,4 +238,158 @@ impl PigmentApp {
         self.edit_mask = false;
         self.force_composite = true;
     }
+
+    // --- Pen tool / work paths ------------------------------------------------
+
+    /// Number of straight pieces each Bézier segment is flattened into for
+    /// fill/overlay. 24 is plenty at typical document scales.
+    const PATH_FLATTEN_STEPS: u32 = 24;
+
+    /// Place a new anchor at `d` (doc px), or — if `d` is within `close_doc` of
+    /// the first anchor and there are ≥ 3 anchors — close the path instead.
+    pub(crate) fn pen_place_or_close(&mut self, d: egui::Vec2, close_doc: f32) {
+        use crate::path::{dist2, Anchor};
+        if self.work_path.closed {
+            return; // already closed; further edits go through Direct Select
+        }
+        let p = [d.x, d.y];
+        if self.work_path.anchors.len() >= 3 {
+            let first = self.work_path.anchors[0].point;
+            if dist2(p, first) <= close_doc * close_doc {
+                self.work_path.closed = true;
+                return;
+            }
+        }
+        self.work_path.anchors.push(Anchor::corner(p));
+    }
+
+    /// Hit-test the work path for Direct-Select. Returns `(anchor_index, part)`
+    /// where part 0 = on-curve point, 1 = h_in, 2 = h_out (handles only count if
+    /// they're pulled off their point). Closest match within `r` doc px wins.
+    pub(crate) fn path_pick(&self, d: egui::Vec2, r: f32) -> Option<(usize, u8)> {
+        use crate::path::dist2;
+        let p = [d.x, d.y];
+        let r2 = r * r;
+        let mut best: Option<(usize, u8, f32)> = None;
+        let mut consider = |idx: usize, part: u8, pt: [f32; 2]| {
+            let dd = dist2(p, pt);
+            if dd <= r2 && best.is_none_or(|(_, _, b)| dd < b) {
+                best = Some((idx, part, dd));
+            }
+        };
+        for (i, a) in self.work_path.anchors.iter().enumerate() {
+            // Handles take priority (drawn on top) when pulled out.
+            if a.h_in != a.point {
+                consider(i, 1, a.h_in);
+            }
+            if a.h_out != a.point {
+                consider(i, 2, a.h_out);
+            }
+            consider(i, 0, a.point);
+        }
+        best.map(|(i, part, _)| (i, part))
+    }
+
+    /// Apply a Direct-Select drag: move an on-curve point (whole anchor) or a
+    /// single handle to `to` (doc px).
+    pub(crate) fn path_move_grab(&mut self, idx: usize, part: u8, to: [f32; 2]) {
+        let Some(a) = self.work_path.anchors.get_mut(idx) else {
+            return;
+        };
+        match part {
+            0 => {
+                let dx = to[0] - a.point[0];
+                let dy = to[1] - a.point[1];
+                a.translate(dx, dy);
+            }
+            1 => a.h_in = to,
+            2 => a.h_out = to,
+            _ => {}
+        }
+    }
+
+    /// Rasterize the closed work-path interior to a 0/1 selection mask. The path
+    /// is flattened to a polygon, then filled with the even-odd rule — the same
+    /// mask shape the lasso/marquee produce, so it feeds the selection and
+    /// layer-mask pipelines unchanged.
+    fn path_fill_mask(&self) -> Vec<f32> {
+        let (w, h) = (self.doc.size.width, self.doc.size.height);
+        let poly = self.work_path.fill_polygon(Self::PATH_FLATTEN_STEPS);
+        crate::path::fill_mask(&poly, w, h)
+    }
+
+    /// Convert the work path's interior into a pixel selection (replace mode).
+    pub(crate) fn path_to_selection(&mut self, frame: &mut eframe::Frame) {
+        if self.work_path.anchors.len() < 2 {
+            return;
+        }
+        let mask = self.path_fill_mask();
+        self.sel_base = vec![0.0; mask.len()];
+        self.sel_mode = CombineMode::Replace;
+        self.commit_selection(frame, mask);
+    }
+
+    /// Apply the work path as a vector mask on the active layer (rasterize the
+    /// path interior into the existing layer-mask pipeline).
+    pub(crate) fn path_to_mask(&mut self, frame: &mut eframe::Frame) {
+        if self.work_path.anchors.len() < 2 {
+            return;
+        }
+        let mask = self.path_fill_mask();
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| gpu.set_mask(d, q, active, Some(&mask)));
+        self.masked_layers.insert(active);
+        self.force_composite = true;
+    }
+
+    /// Draw the work path as an egui overlay: flattened curve + anchors (●) and,
+    /// when `show_handles`, the off-curve handles (○) and their tangent lines.
+    pub(crate) fn draw_path_overlay(
+        &self,
+        ui: &egui::Ui,
+        doc_rect: egui::Rect,
+        show_handles: bool,
+    ) {
+        if self.work_path.is_empty() {
+            return;
+        }
+        let to_screen =
+            |p: [f32; 2]| doc_to_screen(egui::vec2(p[0], p[1]), doc_rect, self.doc.size);
+        let painter = ui.painter();
+        let path_col = egui::Color32::from_rgb(40, 160, 255);
+        let handle_col = egui::Color32::from_rgb(120, 200, 255);
+
+        // Flattened curve (closed path forms a loop).
+        let poly = if self.work_path.closed {
+            self.work_path.fill_polygon(Self::PATH_FLATTEN_STEPS)
+        } else {
+            self.work_path.flatten(Self::PATH_FLATTEN_STEPS)
+        };
+        if poly.len() >= 2 {
+            let mut line: Vec<egui::Pos2> = poly.iter().map(|p| to_screen(*p)).collect();
+            if self.work_path.closed {
+                line.push(line[0]);
+            }
+            painter.add(egui::Shape::line(
+                line,
+                egui::Stroke::new(1.5, path_col),
+            ));
+        }
+
+        // Handles + anchors.
+        for a in &self.work_path.anchors {
+            let ap = to_screen(a.point);
+            if show_handles {
+                for h in [a.h_in, a.h_out] {
+                    if h != a.point {
+                        let hp = to_screen(h);
+                        painter.line_segment([ap, hp], egui::Stroke::new(1.0, handle_col));
+                        painter.circle_stroke(hp, 3.0, egui::Stroke::new(1.0, handle_col));
+                    }
+                }
+            }
+            painter.circle_filled(ap, 3.0, path_col);
+            painter.circle_stroke(ap, 3.5, egui::Stroke::new(1.0, egui::Color32::WHITE));
+        }
+    }
 }

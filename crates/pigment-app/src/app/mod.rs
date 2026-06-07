@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::canvas::{CanvasGpu, CanvasPaint, Dab, LayerDraw, SelectionOp, ViewTransform};
+use crate::path::WorkPath;
 
 /// Window-menu panel visibility (the canvas is always shown).
 #[derive(Clone, Copy)]
@@ -89,6 +90,8 @@ enum Tool {
     Transform,
     Crop,
     Text,
+    Pen,         // pen: click to add anchors, click-drag for Bézier handles
+    DirectSelect, // direct-select: drag anchors/handles of the work path
     ShapeRect,
     ShapeEllipse,
     Gradient,
@@ -223,6 +226,15 @@ pub struct PigmentApp {
     lasso_points: Vec<egui::Vec2>, // in-progress lasso (document px)
     feather_radius: f32,
 
+    // Pen tool / work paths (vector overlay, not part of the GPU composite).
+    /// The current editable work path (anchors in document px).
+    work_path: WorkPath,
+    /// Pen drag in progress on the just-added anchor: drag sets its handles.
+    pen_dragging: bool,
+    /// Direct-select grab: which anchor and which part is being dragged.
+    /// `part`: 0 = on-curve point (moves whole anchor), 1 = h_in, 2 = h_out.
+    pen_grab: Option<(usize, u8)>,
+
     // Move/transform of the active layer.
     xform_active: bool,
     xform_translate: egui::Vec2, // document px
@@ -354,6 +366,9 @@ impl PigmentApp {
             sel_mode: CombineMode::Replace,
             lasso_points: Vec::new(),
             feather_radius: 2.0,
+            work_path: WorkPath::new(),
+            pen_dragging: false,
+            pen_grab: None,
             xform_active: false,
             xform_translate: egui::Vec2::ZERO,
             xform_scale: 1.0,

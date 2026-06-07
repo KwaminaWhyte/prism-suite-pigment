@@ -8,6 +8,7 @@ mod app;
 mod canvas;
 mod contour_import;
 mod icons;
+mod path;
 mod theme;
 
 use app::PigmentApp;
