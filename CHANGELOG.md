@@ -7,6 +7,47 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Pixelate filters — Mosaic, Crystallize, Color Halftone, Mezzotint**
+  (Phase 8). Four new destructive filters wired through the exact existing
+  filter pattern (GPU shader pass keyed by `kind` in `filter.wgsl` → `apply_*`
+  on the compositor → `do_*` in the app → Filter ▸ Pixelate menu → tests), all
+  undoable (region-COW) like the existing blur / distort / stylize / noise
+  filters, all in linear-premultiplied working space. The legacy **Pixelate**
+  (kind 3, which point-samples each block's centre) is preserved and moved into
+  the new submenu alongside the cell-based family.
+  **Mosaic** (kind 20) — averages each `cell`×`cell` block to one colour (the
+  true block mean, alpha-weighted in premultiplied space), so every pixel in a
+  cell shares that average. **Crystallize** (kind 21) — Voronoi-like cells: each
+  pixel snaps to the colour of its nearest jittered seed (one seed per
+  `cell`×`cell` block, offset within the block by a hash of the block index +
+  `seed`; the 3×3 block neighbourhood is searched so adjacent seeds can win),
+  giving irregular polygons. It snaps to the seed's exact texel centre (a true
+  snap to one source colour, never a blend) and is seeded-deterministic per the
+  `diffuse` hash convention. **Color Halftone** (kind 22) — a per-channel dot
+  screen: tile into `cell`-px cells rotated by a screen `angle` (with a 22.5°
+  per-channel offset, CMY-rosette style); each cell's channel average sets a dot
+  radius (darker channel → bigger dot of full ink, brighter → smaller), output
+  binary per channel (full ink / paper). **Mezzotint** (kind 23) — a seeded
+  threshold dither of Rec.709 luma against a per-pixel hashed threshold (biased
+  by `amount`) to pure black/white grain, stable for a given seed. A new
+  **Filter ▸ Pixelate** submenu hosts the legacy Pixelate plus the four with
+  their controls (mosaic/crystallize cell size + crystallize seed; halftone cell
+  + screen angle; mezzotint threshold + seed). Tests: the test-only
+  `canvas::filter_math` CPU reference module gains the four filters (`mosaic`,
+  `crystallize`, `color_halftone`, `mezzotint`) with **7 new deterministic unit
+  tests** — mosaic cell = block average (each cell uniform = its mean) + flat
+  identity, crystallize determinism (same seed ≡, different seed ≠) + cell
+  snapping (output ⊂ source colours, never blended) + flat identity, color
+  halftone dot grows as the cell darkens (more ink) + binary per channel,
+  mezzotint binary + deterministic + brightness-tracking — plus **4 new
+  headless-GPU pixel tests** (`mosaic_cell_is_uniform_block_average`,
+  `crystallize_is_deterministic_and_snaps`,
+  `color_halftone_dot_tracks_brightness`,
+  `mezzotint_is_binary_and_tracks_brightness`) mirroring the existing GPU
+  filter-test pattern. App test count 98 → 109. No shared-crate changes
+  (raster-only, pigment-app per PLAN §0a). *Still open (Phase 8 pixelate
+  backlog):* Fragment, Pointillize, selection-clipped pixelate, non-destructive
+  smart-filter form.
 - **Noise filters — Add Noise, Median, Dust & Scratches** (Phase 8). Three new
   destructive filters wired through the exact existing filter pattern (GPU
   shader pass keyed by `kind` in `filter.wgsl` → `apply_*` on the compositor →

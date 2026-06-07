@@ -141,13 +141,63 @@ impl eframe::App for PigmentApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    ui.add(
-                        egui::Slider::new(&mut self.filter_block, 1.0..=40.0).text("pixel size"),
-                    );
-                    if ui.button("Pixelate").clicked() {
-                        self.do_filter(frame, 3, self.filter_block, 0.0);
-                        ui.close_menu();
-                    }
+                    ui.menu_button("Pixelate", |ui| {
+                        // Pixelate (legacy kind 3: snap to the block-centre
+                        // sample) and the cell-based family below it.
+                        ui.add(
+                            egui::Slider::new(&mut self.filter_block, 1.0..=40.0)
+                                .text("pixel size"),
+                        );
+                        if ui.button("Pixelate").clicked() {
+                            self.do_filter(frame, 3, self.filter_block, 0.0);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Mosaic (true block average) + Crystallize (jittered
+                        // Voronoi cells) share the cell-size slider.
+                        ui.add(
+                            egui::Slider::new(&mut self.mosaic_cell, 2.0..=64.0).text("cell size"),
+                        );
+                        if ui.button("Mosaic").clicked() {
+                            self.do_mosaic(frame, self.mosaic_cell);
+                            ui.close_menu();
+                        }
+                        ui.add(
+                            egui::Slider::new(&mut self.crystallize_seed, 0.0..=100.0)
+                                .text("crystallize seed"),
+                        );
+                        if ui.button("Crystallize").clicked() {
+                            self.do_crystallize(frame, self.mosaic_cell, self.crystallize_seed);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Color Halftone (per-channel dot screen: cell + angle).
+                        ui.add(
+                            egui::Slider::new(&mut self.halftone_cell, 2.0..=32.0)
+                                .text("max radius (cell)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.halftone_angle, 0.0..=90.0)
+                                .text("screen angle°"),
+                        );
+                        if ui.button("Color Halftone").clicked() {
+                            self.do_color_halftone(frame, self.halftone_cell, self.halftone_angle);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Mezzotint (seeded threshold dither to black/white).
+                        ui.add(
+                            egui::Slider::new(&mut self.mezzotint_amount, 0.0..=1.0)
+                                .text("threshold"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.mezzotint_seed, 0.0..=100.0).text("seed"),
+                        );
+                        if ui.button("Mezzotint").clicked() {
+                            self.do_mezzotint(frame, self.mezzotint_amount, self.mezzotint_seed);
+                            ui.close_menu();
+                        }
+                    });
                     ui.separator();
                     ui.menu_button("Blur", |ui| {
                         // Box blur (separable flat kernel).

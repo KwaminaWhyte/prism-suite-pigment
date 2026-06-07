@@ -2360,3 +2360,159 @@ fn dust_scratches_only_changes_above_threshold() {
         "below-threshold pixel preserved: {small:?}"
     );
 }
+
+// ---- Pixelate family (Phase 8) -------------------------------------------
+
+// Mosaic averages each cell to one colour: every pixel inside a cell is equal
+// (the cell is uniform), and that value is the block mean — here a half-black /
+// half-white cell averages to mid-gray.
+#[test]
+fn mosaic_cell_is_uniform_block_average() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping mosaic_cell_is_uniform_block_average");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 8u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    // A single 8×8 cell whose left half is black, right half white → mean 0.5.
+    gpu.upload_layer(
+        &queue,
+        l0,
+        &layer_from(n, |x, _y| {
+            if x < n / 2 {
+                [0.0, 0.0, 0.0, 1.0]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            }
+        }),
+    );
+    gpu.apply_mosaic(&device, &queue, l0, n as f32);
+    // Every pixel is the same mid-gray average.
+    let a = gpu.read_pixel(&device, &queue, l0, 0, 0).unwrap();
+    let b = gpu.read_pixel(&device, &queue, l0, n - 1, n - 1).unwrap();
+    assert!(
+        (a[0] - 0.5).abs() < 0.02,
+        "cell averages to mid-gray: {a:?}"
+    );
+    for c in 0..4 {
+        assert!((a[c] - b[c]).abs() < 0.01, "cell is uniform: {a:?} {b:?}");
+    }
+}
+
+// Crystallize is seeded-deterministic and snaps to source colours: every output
+// pixel equals some input pixel (no blending), and a flat field is unchanged.
+#[test]
+fn crystallize_is_deterministic_and_snaps() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping crystallize_is_deterministic_and_snaps");
+        return;
+    };
+    let n = 16u32;
+    let make = |x: u32, _y: u32| {
+        let v = x as f32 / (n - 1) as f32;
+        [v, 1.0 - v, 0.5, 1.0]
+    };
+    let run = |seed: f32| -> Vec<[f32; 4]> {
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        gpu.ensure_canvas(&device, Size::new(n, n));
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+        gpu.upload_layer(&queue, l0, &layer_from(n, make));
+        gpu.apply_crystallize(&device, &queue, l0, 4.0, seed);
+        let mut px = Vec::new();
+        for y in 0..n {
+            for x in 0..n {
+                px.push(gpu.read_pixel(&device, &queue, l0, x, y).unwrap());
+            }
+        }
+        px
+    };
+    let a = run(7.0);
+    let b = run(7.0);
+    for (pa, pb) in a.iter().zip(b.iter()) {
+        for c in 0..4 {
+            assert!((pa[c] - pb[c]).abs() < 1e-3, "deterministic for a seed");
+        }
+    }
+    // Snapping: every output red value matches one of the source's red values
+    // (the source reds are evenly spaced k/(n-1)).
+    for p in &a {
+        let near = (0..n).any(|k| (p[0] - k as f32 / (n - 1) as f32).abs() < 0.03);
+        assert!(near, "snaps to a source colour, no blend: {p:?}");
+    }
+    let c = run(8.0);
+    assert!(a != c, "different seed → different cells");
+}
+
+// Color Halftone makes bigger dots (more ink) for darker cells: a dark field
+// produces more ink pixels than a bright one.
+#[test]
+fn color_halftone_dot_tracks_brightness() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping color_halftone_dot_tracks_brightness");
+        return;
+    };
+    let n = 32u32;
+    let ink = |v: f32| -> usize {
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        gpu.ensure_canvas(&device, Size::new(n, n));
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+        gpu.upload_layer(&queue, l0, &layer_from(n, |_x, _y| [v, v, v, 1.0]));
+        gpu.apply_color_halftone(&device, &queue, l0, 8.0, 0.0);
+        let mut count = 0;
+        for y in 0..n {
+            for x in 0..n {
+                if gpu.read_pixel(&device, &queue, l0, x, y).unwrap()[0] < 0.5 {
+                    count += 1; // red-channel ink
+                }
+            }
+        }
+        count
+    };
+    let dark = ink(0.2);
+    let bright = ink(0.8);
+    assert!(
+        dark > bright,
+        "darker cell → larger dot → more ink: dark {dark} bright {bright}"
+    );
+}
+
+// Mezzotint produces a pure black/white field that is brighter (more white) for
+// a brighter input and reproducible per seed.
+#[test]
+fn mezzotint_is_binary_and_tracks_brightness() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping mezzotint_is_binary_and_tracks_brightness");
+        return;
+    };
+    let n = 32u32;
+    let white = |v: f32| -> usize {
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        gpu.ensure_canvas(&device, Size::new(n, n));
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+        gpu.upload_layer(&queue, l0, &layer_from(n, |_x, _y| [v, v, v, 1.0]));
+        gpu.apply_mezzotint(&device, &queue, l0, 0.5, 4.0);
+        let mut count = 0;
+        for y in 0..n {
+            for x in 0..n {
+                let p = gpu.read_pixel(&device, &queue, l0, x, y).unwrap();
+                assert!(
+                    p[0] < 0.05 || p[0] > 0.95,
+                    "binary black/white output: {p:?}"
+                );
+                if p[0] > 0.5 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+    let dark = white(0.25);
+    let bright = white(0.75);
+    assert!(bright > dark, "brighter → more white: {bright} > {dark}");
+}

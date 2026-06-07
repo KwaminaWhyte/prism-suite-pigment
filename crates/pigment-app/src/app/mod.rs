@@ -313,6 +313,13 @@ pub struct PigmentApp {
     noise_seed: f32,        // deterministic noise seed
     median_radius: f32,     // median / dust window radius (px)
     dust_threshold: f32,    // dust & scratches threshold (0..1)
+    // Pixelate family (Phase 8).
+    mosaic_cell: f32,       // mosaic / crystallize cell size (px)
+    crystallize_seed: f32,  // crystallize jitter seed
+    halftone_cell: f32,     // color-halftone dot-screen cell size (px)
+    halftone_angle: f32,    // color-halftone screen angle (deg)
+    mezzotint_amount: f32,  // mezzotint threshold bias (0..1)
+    mezzotint_seed: f32,    // mezzotint dither seed
 
     hist: Option<Histogram>,
 
@@ -459,6 +466,12 @@ impl PigmentApp {
             noise_seed: 1.0,
             median_radius: 1.0,
             dust_threshold: 0.1,
+            mosaic_cell: 8.0,
+            crystallize_seed: 1.0,
+            halftone_cell: 8.0,
+            halftone_angle: 45.0,
+            mezzotint_amount: 0.5,
+            mezzotint_seed: 1.0,
             hist: None,
             gen_fp: HashMap::new(),
             shape_drag: None,

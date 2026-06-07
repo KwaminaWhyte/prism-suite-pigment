@@ -701,6 +701,52 @@ impl PigmentApp {
         });
         self.force_composite = true;
     }
+
+    /// Mosaic the active layer: average each `cell`×`cell` block to one colour
+    /// (the true block mean — distinct from the legacy point-sampling Pixelate).
+    pub(crate) fn do_mosaic(&mut self, frame: &mut eframe::Frame, cell: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| gpu.apply_mosaic(d, q, active, cell));
+        self.force_composite = true;
+    }
+
+    /// Crystallize the active layer: snap each pixel to the colour of its nearest
+    /// jittered seed point (one per `cell`×`cell` block, jittered by `seed`),
+    /// giving irregular Voronoi-like polygonal cells. Stable for a given seed.
+    pub(crate) fn do_crystallize(&mut self, frame: &mut eframe::Frame, cell: f32, seed: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_crystallize(d, q, active, cell, seed)
+        });
+        self.force_composite = true;
+    }
+
+    /// Color Halftone on the active layer: a per-channel dot screen of `cell`-px
+    /// cells rotated by `angle_deg`, each cell's channel average setting a dot
+    /// radius (denser ink for darker channels).
+    pub(crate) fn do_color_halftone(
+        &mut self,
+        frame: &mut eframe::Frame,
+        cell: f32,
+        angle_deg: f32,
+    ) {
+        let active = self.active_id();
+        let a = angle_deg.to_radians();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_color_halftone(d, q, active, cell, a)
+        });
+        self.force_composite = true;
+    }
+
+    /// Mezzotint the active layer: a seeded threshold dither to pure black/white
+    /// grain; `amount` biases the threshold, stable for a given `seed`.
+    pub(crate) fn do_mezzotint(&mut self, frame: &mut eframe::Frame, amount: f32, seed: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_mezzotint(d, q, active, amount, seed)
+        });
+        self.force_composite = true;
+    }
 }
 
 #[cfg(test)]

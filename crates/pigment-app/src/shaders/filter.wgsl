@@ -6,7 +6,8 @@ struct FParams {
     // 5 box blur (separable), 6 radial spin, 7 radial zoom,
     // 8 twirl, 9 pinch/spherize, 10 ripple/wave, 11 polar (rect->polar),
     // 12 polar (polar->rect), 13 find edges, 14 emboss, 15 glowing edges,
-    // 16 diffuse, 17 add noise, 18 median, 19 dust & scratches.
+    // 16 diffuse, 17 add noise, 18 median, 19 dust & scratches,
+    // 20 mosaic, 21 crystallize, 22 color halftone, 23 mezzotint.
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -15,16 +16,21 @@ struct FParams {
     dir: vec2<f32>,   // blur direction * texel (Gaussian/box/motion); distort:
                       // (amplitude_px, wavelength_px) for ripple; emboss:
                       // (cos angle, sin angle) light direction; diffuse:
-                      // (seed, _); add noise: (seed, monochromatic flag)
+                      // (seed, _); add noise: (seed, monochromatic flag);
+                      // color halftone: (cos angle, sin angle) screen rotation;
+                      // crystallize/mezzotint: (seed, _)
     amount: f32,      // sharpen amount; radial: spin angle (rad) / zoom fraction;
                       // twirl: max angle (rad); pinch: signed amount (-1..1);
                       // emboss: height/relief gain; glowing edges: brightness;
                       // diffuse: max neighbour displacement in pixels; add noise:
-                      // noise amount (0..1); dust & scratches: threshold
+                      // noise amount (0..1); dust & scratches: threshold;
+                      // mezzotint: noise/threshold style amount
     radius: f32,      // blur radius / pixelate block / motion taps / radial
                       // samples; distort: effect radius in pixels; stylize:
                       // edge sampling width in pixels; add noise: gaussian flag
-                      // (1 gaussian, 0 uniform); median/dust: window radius (px)
+                      // (1 gaussian, 0 uniform); median/dust: window radius (px);
+                      // mosaic/crystallize: cell size (px); color halftone: cell
+                      // (dot screen) size (px)
     center: vec2<f32>, // radial/distort center in uv (0..1)
 };
 
@@ -309,6 +315,161 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
         return vec4<f32>(out * src.a, src.a);
+    } else if p.kind == 20u {
+        // ---- Mosaic (kind 20): average each `cell`×`cell` block to one colour.
+        // Unlike the legacy Pixelate (kind 3, which point-samples the block
+        // centre), this is the true block mean. Averaging is done in
+        // premultiplied space (a straight component mean of premultiplied RGBA),
+        // matching the blur convention, so a partially transparent block is
+        // alpha-weighted correctly.
+        let dim = 1.0 / p.texel;
+        let cell = max(floor(p.radius), 1.0);
+        let px = floor(in.uv * dim);
+        // Snap to the block's origin, then average over the (clamped) block.
+        let bx = floor(px.x / cell) * cell;
+        let by = floor(px.y / cell) * cell;
+        var sum = vec4<f32>(0.0);
+        var n = 0.0;
+        var j = 0.0;
+        loop {
+            if j >= cell { break; }
+            var i = 0.0;
+            loop {
+                if i >= cell { break; }
+                let sx = min(bx + i, dim.x - 1.0);
+                let sy = min(by + j, dim.y - 1.0);
+                sum = sum + textureSample(input, samp, (vec2<f32>(sx, sy) + 0.5) * p.texel);
+                n = n + 1.0;
+                i = i + 1.0;
+            }
+            j = j + 1.0;
+        }
+        return sum / max(n, 1.0);
+    } else if p.kind == 21u {
+        // ---- Crystallize (kind 21): Voronoi-ish cells. Snap each pixel to the
+        // colour sampled at its nearest seed point, where seeds are a jittered
+        // grid (one per `cell`×`cell` block, offset within the block by a hash of
+        // the block index + seed). The 3×3 neighbourhood of blocks is searched so
+        // a jittered seed in an adjacent block can win, giving irregular polygons.
+        let dim = 1.0 / p.texel;
+        let cell = max(floor(p.radius), 1.0);
+        let seed = p.dir.x;
+        let px = in.uv * dim;
+        let cx = floor(px.x / cell);
+        let cy = floor(px.y / cell);
+        var best = 1e30;
+        var bestc = vec2<f32>(px);
+        var gy = -1.0;
+        loop {
+            if gy > 1.0 { break; }
+            var gx = -1.0;
+            loop {
+                if gx > 1.0 { break; }
+                let bx = cx + gx;
+                let by = cy + gy;
+                // Jittered seed position inside this block (hash in [0,1)).
+                let jx = hash21(bx, by, seed);
+                let jy = hash21(bx, by, seed + 41.0);
+                let spx = (vec2<f32>(bx, by) + vec2<f32>(jx, jy)) * cell;
+                let d = spx - px;
+                let dist = dot(d, d);
+                if dist < best {
+                    best = dist;
+                    bestc = spx;
+                }
+                gx = gx + 1.0;
+            }
+            gy = gy + 1.0;
+        }
+        // Snap the winning seed to its integer pixel centre and nearest-sample
+        // (edge-clamped). Sampling the exact texel centre means the bilinear
+        // sampler returns that one source colour — a true snap, never a blend —
+        // so every cell shares an identical input colour.
+        let si = clamp(floor(bestc), vec2<f32>(0.0), dim - 1.0);
+        return textureSample(input, samp, (si + 0.5) * p.texel);
+    } else if p.kind == 22u {
+        // ---- Color Halftone (kind 22): per-channel dot screen. Tile the image
+        // into `cell`×`cell` screens (rotated by p.dir = (cos,sin)); each cell's
+        // channel value sets a dot radius (a denser/darker channel → bigger dot).
+        // Work on the unpremultiplied colour; coverage inside the dot = full
+        // channel ink, outside = none (white-ish), so brighter cells get smaller
+        // ink dots. dir = screen rotation, radius = cell size.
+        let dim = 1.0 / p.texel;
+        let cell = max(floor(p.radius), 2.0);
+        let px = in.uv * dim;
+        let ca = p.dir.x;
+        let sa = p.dir.y;
+        let src = textureSample(input, samp, in.uv);
+        let a = max(src.a, 1e-4);
+        var out = vec3<f32>(0.0);
+        for (var ch = 0; ch < 3; ch = ch + 1) {
+            // Rotate into the channel's screen space (a small per-channel angle
+            // offset spreads the rosette, as in a CMY screen).
+            let off = f32(ch) * 0.39269908; // 22.5° between channels
+            let cc = cos(off) * ca - sin(off) * sa;
+            let ss = sin(off) * ca + cos(off) * sa;
+            let rx = px.x * cc - px.y * ss;
+            let ry = px.x * ss + px.y * cc;
+            // Cell index + this pixel's offset from the cell centre.
+            let cellx = floor(rx / cell);
+            let celly = floor(ry / cell);
+            let cellcx = (cellx + 0.5) * cell;
+            let cellcy = (celly + 0.5) * cell;
+            // Average this channel over the cell (in source space). Walk the cell
+            // in screen space, rotate back to sample the source.
+            var sum = 0.0;
+            var n = 0.0;
+            var yy = 0.0;
+            loop {
+                if yy >= cell { break; }
+                var xx = 0.0;
+                loop {
+                    if xx >= cell { break; }
+                    let lx = cellx * cell + xx;
+                    let ly = celly * cell + yy;
+                    // Inverse-rotate the screen-space point back to image space.
+                    let ix = lx * cc + ly * ss;
+                    let iy = -lx * ss + ly * cc;
+                    let smp = textureSample(input, samp, (vec2<f32>(ix, iy) + 0.5) * p.texel);
+                    sum = sum + smp[ch] / max(smp.a, 1e-4);
+                    n = n + 1.0;
+                    xx = xx + 1.0;
+                }
+                yy = yy + 1.0;
+            }
+            let avg = sum / max(n, 1.0);
+            // Darker channel (lower value) → bigger dot of full ink. Max dot
+            // radius is half the cell diagonal so a 0-value cell is solid.
+            let maxr = cell * 0.70710678; // half diagonal
+            let dotr = (1.0 - avg) * maxr;
+            let d = length(vec2<f32>(rx - cellcx, ry - cellcy));
+            // Inside the dot → channel value 0 (full ink); outside → 1 (paper).
+            if d <= dotr {
+                out[ch] = 0.0;
+            } else {
+                out[ch] = 1.0;
+            }
+        }
+        return vec4<f32>(out * src.a, src.a);
+    } else if p.kind == 23u {
+        // ---- Mezzotint (kind 23): seeded threshold dither to pure black/white
+        // dots. Each pixel's luma is compared against a per-pixel hashed
+        // threshold; a denser hash for darker pixels yields a stochastic
+        // black/white grain. amount biases the threshold; dir.x = seed.
+        let dim = 1.0 / p.texel;
+        let px = in.uv * dim;
+        let ix = floor(px.x);
+        let iy = floor(px.y);
+        let seed = p.dir.x;
+        let src = textureSample(input, samp, in.uv);
+        let a = max(src.a, 1e-4);
+        let col = src.rgb / a;
+        let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+        let luma = dot(col, lw);
+        let t = hash21(ix, iy, seed);
+        // Dither: keep white where luma exceeds the threshold, else black.
+        let v = select(0.0, 1.0, luma > t + (p.amount - 0.5));
+        return vec4<f32>(vec3<f32>(v) * src.a, src.a);
     } else if p.kind == 16u {
         // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
         // swap. Replace each pixel with one of its neighbours within `amount`

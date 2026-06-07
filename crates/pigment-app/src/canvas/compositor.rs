@@ -360,6 +360,132 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Mosaic on the active layer (kind 20): average each `cell`×`cell` block to
+    /// one colour (the true block mean, vs the legacy point-sampling Pixelate).
+    /// `cell` is the cell size in px. Single pass; destructive + undoable.
+    pub fn apply_mosaic(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        cell: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Mosaic");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            20,
+            [0.0; 2],
+            0.0,
+            cell,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
+    /// Crystallize on the active layer (kind 21): snap each pixel to the colour
+    /// of its nearest jittered seed (one per `cell`×`cell` block, jittered by a
+    /// hash of the block index + `seed`), giving irregular Voronoi cells. Single
+    /// pass; destructive + undoable.
+    pub fn apply_crystallize(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        cell: f32,
+        seed: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Crystallize");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            21,
+            [seed, 0.0],
+            0.0,
+            cell,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
+    /// Color Halftone on the active layer (kind 22): a per-channel dot screen of
+    /// `cell`-px cells rotated by `angle_rad`, each cell's channel average setting
+    /// a dot radius (denser ink for darker channels). Single pass; destructive +
+    /// undoable.
+    pub fn apply_color_halftone(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        cell: f32,
+        angle_rad: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Color Halftone");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        let dir = [angle_rad.cos(), angle_rad.sin()];
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            22,
+            dir,
+            0.0,
+            cell,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
+    /// Mezzotint on the active layer (kind 23): seeded threshold dither to pure
+    /// black/white grain. `amount` biases the threshold; `seed` makes it
+    /// reproducible. Single pass; destructive + undoable.
+    pub fn apply_mezzotint(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        amount: f32,
+        seed: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Mezzotint");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            23,
+            [seed, 0.0],
+            amount,
+            0.0,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.
     pub fn composite_now(
         &mut self,
