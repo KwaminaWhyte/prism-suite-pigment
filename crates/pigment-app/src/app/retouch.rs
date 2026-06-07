@@ -509,6 +509,46 @@ impl PigmentApp {
         });
         self.force_composite = true;
     }
+
+    /// Motion blur the active layer: directional box average over `distance`
+    /// taps each side, oriented at `angle_deg`.
+    pub(crate) fn do_motion_blur(
+        &mut self,
+        frame: &mut eframe::Frame,
+        angle_deg: f32,
+        distance: f32,
+    ) {
+        let active = self.active_id();
+        let angle = angle_deg.to_radians();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_motion_blur(d, q, active, angle, distance)
+        });
+        self.force_composite = true;
+    }
+
+    /// Radial blur the active layer about the canvas center. `spin` chooses
+    /// rotational (true, `amount` = degrees) vs zoom (false, `amount` = percent).
+    pub(crate) fn do_radial_blur(
+        &mut self,
+        frame: &mut eframe::Frame,
+        spin: bool,
+        amount: f32,
+        samples: u32,
+    ) {
+        let active = self.active_id();
+        let cx = self.doc.size.width as f32 * 0.5;
+        let cy = self.doc.size.height as f32 * 0.5;
+        // Spin amount is an angle (deg→rad); zoom amount is a percentage.
+        let amt = if spin {
+            amount.to_radians()
+        } else {
+            amount / 100.0
+        };
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_radial_blur(d, q, active, cx, cy, spin, amt, samples)
+        });
+        self.force_composite = true;
+    }
 }
 
 #[cfg(test)]

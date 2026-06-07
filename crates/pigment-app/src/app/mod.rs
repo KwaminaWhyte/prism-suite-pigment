@@ -282,6 +282,13 @@ pub struct PigmentApp {
     filter_radius: f32,
     filter_amount: f32,
     filter_block: f32,
+    // Blur family (Phase 8).
+    motion_angle: f32,    // degrees
+    motion_distance: f32, // taps each side
+    box_radius: f32,
+    radial_amount: f32, // spin: degrees; zoom: percent
+    radial_samples: u32,
+    radial_spin: bool, // true = spin, false = zoom
 
     hist: Option<Histogram>,
 
@@ -401,6 +408,12 @@ impl PigmentApp {
             filter_radius: 4.0,
             filter_amount: 1.0,
             filter_block: 8.0,
+            motion_angle: 0.0,
+            motion_distance: 12.0,
+            box_radius: 4.0,
+            radial_amount: 15.0,
+            radial_samples: 24,
+            radial_spin: true,
             hist: None,
             gen_fp: HashMap::new(),
             shape_drag: None,

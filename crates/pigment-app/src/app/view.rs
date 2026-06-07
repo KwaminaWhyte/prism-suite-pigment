@@ -148,6 +148,63 @@ impl eframe::App for PigmentApp {
                         self.do_filter(frame, 3, self.filter_block, 0.0);
                         ui.close_menu();
                     }
+                    ui.separator();
+                    ui.menu_button("Blur", |ui| {
+                        // Box blur (separable flat kernel).
+                        ui.add(
+                            egui::Slider::new(&mut self.box_radius, 1.0..=40.0).text("box radius"),
+                        );
+                        if ui.button("Box Blur").clicked() {
+                            self.do_filter(frame, 5, self.box_radius, 0.0);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Motion blur (angle + distance).
+                        ui.add(
+                            egui::Slider::new(&mut self.motion_angle, -180.0..=180.0)
+                                .text("angle°"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.motion_distance, 1.0..=100.0)
+                                .text("distance"),
+                        );
+                        if ui.button("Motion Blur").clicked() {
+                            self.do_motion_blur(frame, self.motion_angle, self.motion_distance);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Radial blur (spin / zoom about the canvas center).
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.radial_spin, true, "Spin");
+                            ui.selectable_value(&mut self.radial_spin, false, "Zoom");
+                        });
+                        let amt_label = if self.radial_spin {
+                            "angle°"
+                        } else {
+                            "zoom %"
+                        };
+                        let amt_range = if self.radial_spin {
+                            0.0..=90.0
+                        } else {
+                            0.0..=100.0
+                        };
+                        ui.add(
+                            egui::Slider::new(&mut self.radial_amount, amt_range).text(amt_label),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.radial_samples, 4..=64)
+                                .text("quality (samples)"),
+                        );
+                        if ui.button("Radial Blur").clicked() {
+                            self.do_radial_blur(
+                                frame,
+                                self.radial_spin,
+                                self.radial_amount,
+                                self.radial_samples,
+                            );
+                            ui.close_menu();
+                        }
+                    });
                 });
                 ui.menu_button("Select", |ui| {
                     if ui.button("All").clicked() {

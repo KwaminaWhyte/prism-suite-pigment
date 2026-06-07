@@ -7,6 +7,35 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Blur family filters — Motion, Box, Radial** (Phase 8). Three new
+  destructive blur filters, wired through the exact existing filter pattern
+  (GPU shader pass keyed by `kind` in `filter.wgsl` → `apply_*` on the
+  compositor → `do_*` in the app → Filter ▸ Blur menu → tests), all undoable
+  (region-COW) like the existing Gaussian / Sharpen / Pixelate filters.
+  **Motion Blur** (kind 4) — a directional/linear box average of `2·distance+1`
+  taps along an `angle`, the classic streak blur (single pass). **Box Blur**
+  (kind 5) — a flat, correctly-normalized kernel run separably (horizontal then
+  vertical pass, reusing the Gaussian two-pass path) for a fast even blur.
+  **Radial Blur** (kinds 6/7) — about the canvas center, in two modes:
+  **Spin** (rotational, amount = degrees; smears tangentially) and **Zoom**
+  (radial, amount = % ; smears toward/from the center), with a quality
+  (sample-count) control; spin corrects for non-square pixels so the rotation
+  is circular in pixel space. All operate in linear-premultiplied working space
+  (averaging premultiplied samples is a correct blur) and reuse the existing
+  edge-clamped filter sampler. A new **Filter ▸ Blur** submenu hosts the three
+  with their parameter sliders (box radius; motion angle + distance; radial
+  spin/zoom toggle + amount + samples). Tests: a new CPU reference module
+  (`canvas::filter_math`, test-only) gives **12 deterministic unit tests** of
+  the kernel math the shader implements — motion-blur axis-only smearing +
+  energy conservation + radius-0 identity, box-blur separability/normalization
+  (flat-field preserved, impulse → 3×3, two-axis equivalence, radius-0
+  identity), radial spin-vs-zoom directionality + both-mode identity at amount 0
+  + determinism — plus **3 new headless-GPU pixel tests** (`motion_blur_smears_
+  along_angle`, `box_blur_normalizes_and_spreads`, `radial_spin_vs_zoom`)
+  mirroring the existing GPU filter-test pattern. App test count 51 → 66.
+  *Still open (Phase 8 blur backlog):* Surface Blur, Smart Blur, the Blur
+  Gallery (Field/Iris/Tilt-Shift/Path/Lens), on-canvas radial-center handle,
+  selection-clipped blur, non-destructive smart-filter form.
 - **Gradient editor / gradient fill** (Phase 4 completion). The gradient tool is
   now a full multi-stop gradient editor: an independent **color rail** and
   **opacity rail** (Photoshop's two-rail model — add/remove/position color stops

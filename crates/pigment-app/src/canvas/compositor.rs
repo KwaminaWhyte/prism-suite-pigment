@@ -13,6 +13,24 @@ impl CanvasGpu {
         amount: f32,
         radius: f32,
     ) {
+        self.filter_pass_c(
+            device, queue, input, output, kind, dir, amount, radius, [0.0; 2],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn filter_pass_c(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &wgpu::TextureView,
+        output: &wgpu::TextureView,
+        kind: u32,
+        dir: [f32; 2],
+        amount: f32,
+        radius: f32,
+        center: [f32; 2],
+    ) {
         let (w, h) = (
             self.canvas_size.width as f32,
             self.canvas_size.height as f32,
@@ -27,7 +45,7 @@ impl CanvasGpu {
                 dir,
                 amount,
                 radius,
-                _q: [0.0; 2],
+                center,
             }),
         );
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -65,7 +83,10 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
-    /// Apply a destructive filter to a layer (kind: 1 blur, 2 sharpen, 3 pixelate).
+    /// Apply a destructive filter to a layer.
+    /// kind: 1 Gaussian blur, 2 sharpen, 3 pixelate, 5 box blur. Gaussian and
+    /// box blur are separable and run two passes (H then V); the rest run once.
+    /// (Motion blur and radial blur take extra geometry — see their methods.)
     pub fn apply_filter(
         &mut self,
         device: &wgpu::Device,
@@ -79,11 +100,30 @@ impl CanvasGpu {
         let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
             return;
         };
-        if kind == 1 {
+        // Separable blurs (Gaussian=1, Box=5): horizontal then vertical pass.
+        if kind == 1 || kind == 5 {
             let tx = [1.0 / self.canvas_size.width as f32, 0.0];
             let ty = [0.0, 1.0 / self.canvas_size.height as f32];
-            self.filter_pass(device, queue, &layer.view, &pong.view, 1, tx, 0.0, radius);
-            self.filter_pass(device, queue, &pong.view, &layer.view, 1, ty, 0.0, radius);
+            self.filter_pass(
+                device,
+                queue,
+                &layer.view,
+                &pong.view,
+                kind,
+                tx,
+                0.0,
+                radius,
+            );
+            self.filter_pass(
+                device,
+                queue,
+                &pong.view,
+                &layer.view,
+                kind,
+                ty,
+                0.0,
+                radius,
+            );
         } else {
             self.filter_pass(
                 device,
@@ -99,6 +139,72 @@ impl CanvasGpu {
             copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
             queue.submit([enc.finish()]);
         }
+    }
+
+    /// Motion blur: a flat box average of `2*radius+1` taps along `angle_rad`
+    /// (a directional/linear blur). Single pass; destructive + undoable.
+    pub fn apply_motion_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        angle_rad: f32,
+        radius: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Motion Blur");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        // Unit direction scaled into uv (texel) space, matching the CPU ref
+        // which steps one pixel per tap along (cos, sin).
+        let dir = [
+            angle_rad.cos() / self.canvas_size.width as f32,
+            angle_rad.sin() / self.canvas_size.height as f32,
+        ];
+        self.filter_pass(device, queue, &layer.view, &pong.view, 4, dir, 0.0, radius);
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
+    /// Radial blur about `(cx, cy)` (pixel coords). `spin` selects rotational
+    /// (true) vs zoom (false). `amount` is the spin angle in radians or the
+    /// zoom fraction; `samples` is the tap count. Single pass; destructive.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_radial_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        cx: f32,
+        cy: f32,
+        spin: bool,
+        amount: f32,
+        samples: u32,
+    ) {
+        self.begin_command_now(device, queue, id, "Radial Blur");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        let kind = if spin { 6 } else { 7 };
+        let center = [
+            cx / self.canvas_size.width as f32,
+            cy / self.canvas_size.height as f32,
+        ];
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            kind,
+            [0.0; 2],
+            amount,
+            samples.max(1) as f32,
+            center,
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
     }
 
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.

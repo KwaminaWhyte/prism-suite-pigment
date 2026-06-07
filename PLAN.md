@@ -285,7 +285,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 Implement as a unified `prism-fx` GPU pass registry (OpenFX-style; shared with the suite) so each
 filter is authored once. Destructive on a layer **or** non-destructive as a smart filter (Phase 7).
 - [ ] **Blur Gallery** (M): Field, Iris, Tilt-Shift, Path, Spin blur; bokeh shape; Lens Blur (depth/alpha-aware)
-- [ ] **Motion blur, Box, Surface, Radial, Smart Blur** (S/M)
+- [~] **Motion blur, Box, Surface, Radial, Smart Blur** (S/M): **Motion** (angle + distance, directional box average), **Box** (separable flat kernel), and **Radial** (Spin/rotational + Zoom about center, with a samples/quality control) **done** — destructive on the active layer, undoable (region-COW), wired through the existing filter shader (`filter.wgsl` kinds 4–7) → compositor `apply_*` → Filter ▸ Blur menu; 12 CPU unit tests of the kernel math + 3 GPU pixel tests. *Still:* **Surface Blur** (edge-preserving) and **Smart Blur**.
 - [ ] **Sharpen family** (S): Smart Sharpen (radius/amount/noise-reduce/lens-vs-motion), Unsharp Mask (have), High Pass
 - [ ] **Noise** (S): Add Noise (gaussian/uniform, monochromatic), Reduce Noise, Median, Dust & Scratches, Despeckle
 - [ ] **Distort** (M): Warp (mesh + presets), Pinch, Spherize, Polar Coords, Ripple, Wave, Twirl, Shear, Displace (displacement map), Lens Correction (`lensfun`: distortion/CA/vignette), Adaptive Wide Angle
@@ -366,7 +366,7 @@ intentionally a sibling-app concern. Target ≥85% of the *weighted, real-world-
 | Transform | move/scale/translate baked | **Done**; rotate/skew/distort/perspective/warp/puppet **Planned** | 2,7,8 |
 | Adjustments | 7 core + Curves/Vibrance/Photo Filter/Posterize/Gradient Map/Color Balance/Channel Mixer; rest planned | **Done** core; rest **Planned** | 3,7 |
 | Masks | layer masks done; clipping/vector/group + blend-if | **Done** core; rest **Planned** | 3,4,7 |
-| Filters | blur/sharpen/pixelate done; full galleries | **Done** core; rest **Planned** | 3,8 |
+| Filters | gaussian/box/motion/radial blur, sharpen, pixelate done; full galleries | **Done** core; rest **Planned** | 3,8 |
 | Retouch / heal / clone / content-aware / liquify | none yet | **Planned** | 6 |
 | Layer styles (FX) | 8 styles done (stroke, drop/inner shadow, outer/inner glow, color/gradient overlay, bevel & emboss) | **Partial** (Satin, Pattern Overlay left) | 7 |
 | Smart objects / smart filters | none yet | **Planned** | 7 |

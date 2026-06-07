@@ -141,7 +141,7 @@ struct FilterParams {
     dir: [f32; 2],
     amount: f32,
     radius: f32,
-    _q: [f32; 2],
+    center: [f32; 2],
 }
 
 #[repr(C)]
@@ -838,6 +838,11 @@ mod paint;
 mod selection;
 
 pub use paint::CanvasPaint;
+
+// CPU reference math for the blur-family filters — compiled only for tests
+// (the live path is the GPU shader pass in `compositor`).
+#[cfg(test)]
+mod filter_math;
 
 #[cfg(test)]
 mod gpu_tests;
