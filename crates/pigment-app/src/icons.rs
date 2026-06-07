@@ -57,6 +57,8 @@ pub const HEAL: &str = ph::BANDAIDS;
 pub const SPOT_HEAL: &str = ph::SPARKLE;
 /// Content-aware fill tool (PatchMatch synthesis).
 pub const CONTENT_FILL: &str = ph::MAGIC_WAND;
+/// Patch tool (lasso a region, drag onto a source, seamless-clone).
+pub const PATCH: &str = ph::SELECTION_FOREGROUND;
 /// Dodge / burn tool (lighten / darken).
 pub const DODGE: &str = ph::SUN;
 /// Liquify (mesh warp) tool.

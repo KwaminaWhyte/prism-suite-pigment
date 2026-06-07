@@ -134,6 +134,100 @@ impl PigmentApp {
         self.force_composite = true;
     }
 
+    /// Patch tool on drag-release: gradient-domain seamless-clone the texture
+    /// from a dragged source area into the lasso-selected destination region,
+    /// tone-matched to the destination boundary (`prism_core::heal::seamless_clone`).
+    ///
+    /// `region` is the destination 0/1 mask (canvas-sized); `offset` is the drag
+    /// vector (doc px) — the source pixel for destination `p` is `p − offset`.
+    /// Clipped to the active selection when one exists. Region-COW undo.
+    pub(crate) fn do_patch(
+        &mut self,
+        frame: &mut eframe::Frame,
+        region: Vec<bool>,
+        offset: [f32; 2],
+    ) {
+        if !region.iter().any(|&m| m) {
+            return;
+        }
+        let (w, h) = (self.doc.size.width as usize, self.doc.size.height as usize);
+        if region.len() != w * h {
+            return;
+        }
+        // Clip the patch region to the active selection (if any).
+        let sel = if self.selection_active {
+            Some(self.read_selection(frame))
+        } else {
+            None
+        };
+        let active = self.active_id();
+        let off = (offset[0].round() as i64, offset[1].round() as i64);
+        with_gpu(frame, |gpu, d, q| {
+            gpu.begin_command_now(d, q, active, "Patch");
+            let Some(bytes) = gpu.read_layer(d, q, active) else {
+                return;
+            };
+            let prem = f16_bytes_to_f32(&bytes); // premultiplied linear RGBA
+                                                 // Premultiplied → straight linear.
+            let mut dest = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = prem[p * 4 + 3];
+                let inv = if a > 1e-5 { 1.0 / a } else { 0.0 };
+                dest[p * 4] = prem[p * 4] * inv;
+                dest[p * 4 + 1] = prem[p * 4 + 1] * inv;
+                dest[p * 4 + 2] = prem[p * 4 + 2] * inv;
+                dest[p * 4 + 3] = a;
+            }
+            // Build the destination mask: region ∩ selection, minus pixels whose
+            // source falls off-canvas (no real texture to transplant).
+            let mut mask = region;
+            for y in 0..h {
+                for x in 0..w {
+                    let p = y * w + x;
+                    if !mask[p] {
+                        continue;
+                    }
+                    if let Some(s) = &sel {
+                        if s[p] <= 0.5 {
+                            mask[p] = false;
+                            continue;
+                        }
+                    }
+                    let sx = x as i64 - off.0;
+                    let sy = y as i64 - off.1;
+                    if sx < 0 || sy < 0 || sx >= w as i64 || sy >= h as i64 {
+                        mask[p] = false;
+                    }
+                }
+            }
+            // Full offset-aligned source (clamped at edges) so the Poisson
+            // guidance has valid gradients at the region boundary too.
+            let mut src = vec![0.0f32; w * h * 4];
+            for y in 0..h {
+                for x in 0..w {
+                    let sx = (x as i64 - off.0).clamp(0, w as i64 - 1) as usize;
+                    let sy = (y as i64 - off.1).clamp(0, h as i64 - 1) as usize;
+                    let (p, sp) = (y * w + x, sy * w + sx);
+                    for c in 0..4 {
+                        src[p * 4 + c] = dest[sp * 4 + c];
+                    }
+                }
+            }
+            let solved = prism_core::heal::seamless_clone(&dest, &src, &mask, w, h, 250);
+            // Straight → premultiplied f16.
+            let mut out = vec![0.0f32; w * h * 4];
+            for p in 0..w * h {
+                let a = solved[p * 4 + 3];
+                out[p * 4] = solved[p * 4] * a;
+                out[p * 4 + 1] = solved[p * 4 + 1] * a;
+                out[p * 4 + 2] = solved[p * 4 + 2] * a;
+                out[p * 4 + 3] = a;
+            }
+            gpu.upload_layer(q, active, &f32_to_f16_bytes(&out));
+        });
+        self.force_composite = true;
+    }
+
     /// Spot heal on release: brush a blemish, auto-source a clean region, blend
     /// (`prism_core::heal::spot_heal`). No manual source anchor.
     pub(crate) fn do_spot_heal(&mut self, frame: &mut eframe::Frame) {
@@ -405,5 +499,171 @@ impl PigmentApp {
             gpu.apply_filter(d, q, active, kind, radius, amount)
         });
         self.force_composite = true;
+    }
+}
+
+#[cfg(test)]
+mod patch_tests {
+    //! `do_patch` itself is GPU-bound (read/upload layer), but its CPU pipeline —
+    //! build an offset-aligned source, clip the region to the selection, then
+    //! `seamless_clone` — is pure. These tests exercise that exact pipeline plus
+    //! the `translate_mask` helper, so the Patch tool's transplant math and undo
+    //! (region-COW, identity round-trip) are covered without a GPU adapter.
+    use super::super::translate_mask;
+    use prism_core::heal::seamless_clone;
+
+    /// Replicate the straight-linear pipeline `do_patch` runs after layer
+    /// readback: clip `region` to `sel`, build the source as `image[p − off]`
+    /// (clamped), and seamless-clone. Returns the new straight-RGBA buffer.
+    fn patch_pipeline(
+        image: &[f32],
+        region: &[bool],
+        sel: Option<&[f32]>,
+        w: usize,
+        h: usize,
+        off: (i64, i64),
+        iters: usize,
+    ) -> Vec<f32> {
+        let mut mask = region.to_vec();
+        for y in 0..h {
+            for x in 0..w {
+                let p = y * w + x;
+                if !mask[p] {
+                    continue;
+                }
+                if let Some(s) = sel {
+                    if s[p] <= 0.5 {
+                        mask[p] = false;
+                        continue;
+                    }
+                }
+                let (sx, sy) = (x as i64 - off.0, y as i64 - off.1);
+                if sx < 0 || sy < 0 || sx >= w as i64 || sy >= h as i64 {
+                    mask[p] = false;
+                }
+            }
+        }
+        let mut src = vec![0.0f32; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let sx = (x as i64 - off.0).clamp(0, w as i64 - 1) as usize;
+                let sy = (y as i64 - off.1).clamp(0, h as i64 - 1) as usize;
+                let (p, sp) = (y * w + x, sy * w + sx);
+                src[p * 4..p * 4 + 4].copy_from_slice(&image[sp * 4..sp * 4 + 4]);
+            }
+        }
+        seamless_clone(image, &src, &mask, w, h, iters)
+    }
+
+    fn fill(w: usize, h: usize, rgba: [f32; 4]) -> Vec<f32> {
+        let mut v = Vec::with_capacity(w * h * 4);
+        for _ in 0..w * h {
+            v.extend_from_slice(&rgba);
+        }
+        v
+    }
+
+    #[test]
+    fn patch_transplants_source_texture_into_destination() {
+        // Flat gray image with a bright dot at a SOURCE area to the right of the
+        // destination region. Patch with an offset that samples from the source:
+        // the destination interior should pick up the source's brightening, while
+        // its boundary tone stays matched to the surrounding gray.
+        let (w, h) = (24, 12);
+        let mut img = fill(w, h, [0.5, 0.5, 0.5, 1.0]);
+        // Bright 4×4 block in the source area (centered ~ (17, 6)).
+        for y in 4..8 {
+            for x in 15..19 {
+                let p = (y * w + x) * 4;
+                img[p] = 0.9;
+                img[p + 1] = 0.9;
+                img[p + 2] = 0.9;
+            }
+        }
+        // Destination region: 4×4 block on the left (centered ~ (5, 6)).
+        let mut region = vec![false; w * h];
+        for y in 4..8 {
+            for x in 3..7 {
+                region[y * w + x] = true;
+            }
+        }
+        // off = dest − source = (5−17, 0) = (−12, 0); src[p] = img[p − off] = img[p+12].
+        let out = patch_pipeline(&img, &region, None, w, h, (-12, 0), 400);
+        // Destination center should brighten toward the transplanted source.
+        let c = (6 * w + 5) * 4;
+        assert!(
+            out[c] > 0.62,
+            "destination center should pick up bright source texture, got {}",
+            out[c]
+        );
+        // A pixel well outside the region is untouched (region-COW: only the
+        // masked region changes; undo restores the rest exactly).
+        let outside = (0 * w + 0) * 4;
+        assert_eq!(out[outside], img[outside]);
+    }
+
+    #[test]
+    fn patch_clips_to_selection() {
+        // The region spans two columns but the selection only allows the left
+        // column; the right column must be left equal to the original image.
+        let (w, h) = (10, 6);
+        let mut img = fill(w, h, [0.4, 0.4, 0.4, 1.0]);
+        // Bright source band on the far right.
+        for y in 0..h {
+            for x in 7..10 {
+                let p = (y * w + x) * 4;
+                img[p] = 0.95;
+                img[p + 1] = 0.95;
+                img[p + 2] = 0.95;
+            }
+        }
+        let mut region = vec![false; w * h];
+        for y in 2..4 {
+            for x in 2..4 {
+                region[y * w + x] = true;
+            }
+        }
+        // Selection allows only column x == 2.
+        let mut sel = vec![0.0f32; w * h];
+        for y in 0..h {
+            sel[y * w + 2] = 1.0;
+        }
+        let out = patch_pipeline(&img, &region, Some(&sel), w, h, (-5, 0), 200);
+        // x == 3 was in the region but outside the selection → unchanged.
+        let clipped = (2 * w + 3) * 4;
+        assert_eq!(out[clipped], img[clipped]);
+    }
+
+    #[test]
+    fn patch_identity_offset_is_noop() {
+        // Zero offset (source == dest): the membrane absorbs nothing and the
+        // result equals the input — the undo/redo identity property.
+        let (w, h) = (8, 8);
+        let img = fill(w, h, [0.3, 0.6, 0.2, 1.0]);
+        let mut region = vec![false; w * h];
+        for y in 2..6 {
+            for x in 2..6 {
+                region[y * w + x] = true;
+            }
+        }
+        let out = patch_pipeline(&img, &region, None, w, h, (0, 0), 100);
+        for (i, (&o, &d)) in out.iter().zip(img.iter()).enumerate() {
+            assert!((o - d).abs() < 1e-3, "idx {i}: {o} vs {d}");
+        }
+    }
+
+    #[test]
+    fn translate_mask_shifts_and_clips() {
+        let (w, h) = (6u32, 6u32);
+        let mut m = vec![false; (w * h) as usize];
+        m[(2 * w + 2) as usize] = true; // (2,2)
+        m[(0 * w + 0) as usize] = true; // (0,0) — will fall off-canvas when shifted up-left
+        let out = translate_mask(&m, w, h, 1.0, 1.0);
+        assert!(out[(3 * w + 3) as usize], "(2,2) → (3,3)");
+        assert!(out[(1 * w + 1) as usize], "(0,0) → (1,1)");
+        // Shifting up-left drops the (0,0) pixel off-canvas.
+        let out2 = translate_mask(&m, w, h, -1.0, -1.0);
+        assert!(out2[(1 * w + 1) as usize], "(2,2) → (1,1)");
+        assert_eq!(out2.iter().filter(|&&b| b).count(), 1, "(0,0) clipped away");
     }
 }

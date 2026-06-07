@@ -7,6 +7,13 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Patch tool** (Phase 6 retouch). Lasso/freehand-select a region and drag it to
+  a source area; on release a gradient-domain Poisson solve
+  (`prism_core::heal::seamless_clone`) transplants the source's *texture* into the
+  destination while tone-matching the region boundary — seamless, not a hard copy.
+  PS-style **Source / Destination** mode toggle in the tool-options bar;
+  selection-clipped, region-COW undo. Four unit tests (texture transplant,
+  selection clipping, identity-offset no-op, mask translate/clip).
 - **Layer style: Color Overlay** (Phase 7). Recolors a layer's covered pixels
   toward a chosen color by strength, evaluated live in the compositor. Per-layer
   color picker; GPU pixel-tested. Completes the Stroke/Drop-Shadow/Overlay trio.

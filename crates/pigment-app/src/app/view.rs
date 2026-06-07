@@ -290,6 +290,12 @@ impl eframe::App for PigmentApp {
                         ui.separator();
                         ui.label("Alt-click sets the source");
                     }
+                    if self.tool == Tool::Patch {
+                        ui.separator();
+                        ui.selectable_value(&mut self.patch_source_mode, true, "Source");
+                        ui.selectable_value(&mut self.patch_source_mode, false, "Destination");
+                        ui.label("Lasso a region, then drag it onto the texture to clone");
+                    }
                 });
             });
         }
@@ -329,6 +335,7 @@ impl eframe::App for PigmentApp {
                                     (T::Heal, icons::HEAL, "Healing brush"),
                                     (T::SpotHeal, icons::SPOT_HEAL, "Spot heal"),
                                     (T::ContentFill, icons::CONTENT_FILL, "Content-aware fill"),
+                                    (T::Patch, icons::PATCH, "Patch"),
                                     (T::Dodge, icons::DODGE, "Dodge / burn"),
                                     (T::Detail, icons::DETAIL, "Detail (sponge/blur/sharpen)"),
                                     (T::Liquify, icons::LIQUIFY, "Liquify"),
@@ -1263,6 +1270,125 @@ impl eframe::App for PigmentApp {
                         {
                             self.do_content_fill(frame);
                             self.stroke_last = None;
+                        }
+                    }
+                    Tool::Patch => {
+                        let (w, h) = (self.doc.size.width, self.doc.size.height);
+                        let has_region = self.patch_region.iter().any(|&m| m);
+                        if !has_region {
+                            // Phase 1: freehand-lasso the region to transplant.
+                            if response.drag_started() {
+                                self.patch_points.clear();
+                                if let Some(p) = response.interact_pointer_pos() {
+                                    self.patch_points
+                                        .push(screen_to_doc(p, doc_rect, self.doc.size));
+                                }
+                            }
+                            if response.dragged() {
+                                if let Some(p) = response.interact_pointer_pos() {
+                                    let d = screen_to_doc(p, doc_rect, self.doc.size);
+                                    if self
+                                        .patch_points
+                                        .last()
+                                        .is_none_or(|l| (*l - d).length() > 2.0)
+                                    {
+                                        self.patch_points.push(d);
+                                    }
+                                }
+                                ui.ctx().request_repaint();
+                            }
+                            if response.drag_stopped() {
+                                if self.patch_points.len() >= 3 {
+                                    let pts: Vec<(f32, f32)> =
+                                        self.patch_points.iter().map(|v| (v.x, v.y)).collect();
+                                    let m = raster::polygon_mask(&pts, w, h);
+                                    self.patch_region = m.iter().map(|&v| v > 0.5).collect();
+                                    // Centroid = the handle the user grabs to drag.
+                                    let (mut sx, mut sy, mut n) = (0.0f32, 0.0f32, 0.0f32);
+                                    for (i, &on) in self.patch_region.iter().enumerate() {
+                                        if on {
+                                            sx += (i as u32 % w) as f32 + 0.5;
+                                            sy += (i as u32 / w) as f32 + 0.5;
+                                            n += 1.0;
+                                        }
+                                    }
+                                    if n > 0.0 {
+                                        self.patch_anchor = Some(egui::vec2(sx / n, sy / n));
+                                    }
+                                    self.patch_offset = egui::Vec2::ZERO;
+                                }
+                                self.patch_points.clear();
+                            }
+                            // Draw the in-progress lasso path.
+                            if self.patch_points.len() >= 2 {
+                                let pts: Vec<egui::Pos2> = self
+                                    .patch_points
+                                    .iter()
+                                    .map(|v| doc_to_screen(*v, doc_rect, self.doc.size))
+                                    .collect();
+                                ui.painter().add(egui::Shape::line(
+                                    pts,
+                                    egui::Stroke::new(1.5, egui::Color32::WHITE),
+                                ));
+                            }
+                        } else {
+                            // Phase 2: drag the region onto a source area.
+                            if response.drag_started() {
+                                if let Some(p) = response.interact_pointer_pos() {
+                                    self.stroke_last =
+                                        Some(screen_to_doc(p, doc_rect, self.doc.size));
+                                    self.patch_offset = egui::Vec2::ZERO;
+                                }
+                            }
+                            if response.dragged() {
+                                if let (Some(start), Some(p)) =
+                                    (self.stroke_last, response.interact_pointer_pos())
+                                {
+                                    let cur = screen_to_doc(p, doc_rect, self.doc.size);
+                                    self.patch_offset = cur - start;
+                                }
+                                ui.ctx().request_repaint();
+                            }
+                            if response.drag_stopped() {
+                                let drag = self.patch_offset;
+                                if drag.length() >= 1.0 {
+                                    let region = self.patch_region.clone();
+                                    // Source mode: lasso = destination, drag points at the
+                                    // source texture (src[p] = image[p + drag]).
+                                    // Destination mode: lasso = source, drag moves it onto
+                                    // the destination (dest = region + drag).
+                                    if self.patch_source_mode {
+                                        self.do_patch(frame, region, [-drag.x, -drag.y]);
+                                    } else {
+                                        let dest = translate_mask(&region, w, h, drag.x, drag.y);
+                                        self.do_patch(frame, dest, [drag.x, drag.y]);
+                                    }
+                                    // Consume the region after applying.
+                                    self.patch_region.clear();
+                                    self.patch_anchor = None;
+                                }
+                                self.patch_offset = egui::Vec2::ZERO;
+                                self.stroke_last = None;
+                            }
+                            // Draw the committed region outline + its dragged ghost.
+                            let to_screen =
+                                |d: egui::Vec2| doc_to_screen(d, doc_rect, self.doc.size);
+                            if let Some(anchor) = self.patch_anchor {
+                                let a = to_screen(anchor);
+                                let b = to_screen(anchor + self.patch_offset);
+                                let col = egui::Color32::from_rgb(80, 200, 255);
+                                let painter = ui.painter();
+                                painter.circle_stroke(a, 5.0, egui::Stroke::new(1.5, col));
+                                if self.patch_offset.length() > 0.5 {
+                                    painter.line_segment([a, b], egui::Stroke::new(1.5, col));
+                                    painter.circle_filled(b, 3.0, col);
+                                }
+                            }
+                            // Right-click / Esc-style: clicking outside re-arms lasso.
+                            if response.clicked_by(egui::PointerButton::Secondary) {
+                                self.patch_region.clear();
+                                self.patch_anchor = None;
+                            }
                         }
                     }
                     Tool::Dodge => {

@@ -76,6 +76,7 @@ enum Tool {
     Heal,        // healing brush: Alt-click source, brush region, gradient-domain heal on release
     SpotHeal,    // spot heal: brush a blemish, auto-source + heal on release (no manual source)
     ContentFill, // content-aware fill: brush a region, PatchMatch-synthesize from surroundings
+    Patch,       // patch: lasso a region, drag it onto a source area, gradient-domain seamless-clone
     Dodge,       // dodge (lighten) / burn (darken with Alt) — brushed soft tonal adjust
     Liquify,     // mesh warp: push/twirl/pucker/bloat via a displacement field
     Detail,      // detail brush: saturate/desaturate (sponge), blur, sharpen
@@ -186,6 +187,18 @@ pub struct PigmentApp {
     /// Healing Brush coverage (canvas-sized, doc px); accumulated over a stroke,
     /// solved on release.
     heal_mask: Vec<bool>,
+    /// Patch tool: the lasso-defined region being transplanted (in-progress
+    /// freehand points in doc px while drawing; committed as `patch_region`).
+    patch_points: Vec<egui::Vec2>,
+    /// Patch tool: the committed destination region as a 0/1 mask (canvas-sized),
+    /// and the centroid the user grabs to drag it onto a source area.
+    patch_region: Vec<bool>,
+    patch_anchor: Option<egui::Vec2>,
+    /// Patch tool: live drag offset (source = region translated by −offset).
+    patch_offset: egui::Vec2,
+    /// Patch tool: "Source" mode (drag the selection onto the texture to use as
+    /// fill; PS-style) vs "Destination" mode (drag a sampled patch onto the sel).
+    patch_source_mode: bool,
     /// Dodge/Burn soft coverage (0..1, canvas-sized); accumulated over a stroke,
     /// applied on release.
     tone_mask: Vec<f32>,
@@ -308,6 +321,11 @@ impl PigmentApp {
             clone_source: None,
             clone_offset: [0.0; 2],
             heal_mask: Vec::new(),
+            patch_points: Vec::new(),
+            patch_region: Vec::new(),
+            patch_anchor: None,
+            patch_offset: egui::Vec2::ZERO,
+            patch_source_mode: true,
             tone_mask: Vec::new(),
             liquify_src: Vec::new(),
             liquify_disp: Vec::new(),
@@ -405,6 +423,27 @@ fn shape_mask(rect: [f32; 4], ellipse: bool, w: u32, h: u32) -> Vec<f32> {
         }
     }
     m
+}
+
+/// Translate a boolean region mask by `(dx, dy)` doc px (rounded), dropping
+/// pixels that fall off-canvas. Used by the Patch tool to relocate the
+/// destination region in Destination mode.
+fn translate_mask(mask: &[bool], w: u32, h: u32, dx: f32, dy: f32) -> Vec<bool> {
+    let (dx, dy) = (dx.round() as i64, dy.round() as i64);
+    let (wi, hi) = (w as i64, h as i64);
+    let mut out = vec![false; (w * h) as usize];
+    for y in 0..hi {
+        for x in 0..wi {
+            if !mask[(y * wi + x) as usize] {
+                continue;
+            }
+            let (nx, ny) = (x + dx, y + dy);
+            if nx >= 0 && ny >= 0 && nx < wi && ny < hi {
+                out[(ny * wi + nx) as usize] = true;
+            }
+        }
+    }
+    out
 }
 
 /// Copy a `dw`x`dh` window of an RGBA-f32 image, sampling src at (x+ox, y+oy);
