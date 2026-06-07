@@ -600,6 +600,62 @@ impl PigmentApp {
         });
         self.force_composite = true;
     }
+
+    /// Find Edges on the active layer: Sobel gradient magnitude inverted to a
+    /// white background with dark edges (PS-style), over a `width`-px step.
+    pub(crate) fn do_find_edges(&mut self, frame: &mut eframe::Frame, width: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_stylize(d, q, active, 13, 0.0, width, [0.0; 2])
+        });
+        self.force_composite = true;
+    }
+
+    /// Emboss the active layer into a directional gray relief: the luma gradient
+    /// projected onto the `angle_deg` light direction, scaled by `amount`
+    /// (relief gain), biased to mid-gray. `width` is the Sobel sampling step.
+    pub(crate) fn do_emboss(
+        &mut self,
+        frame: &mut eframe::Frame,
+        angle_deg: f32,
+        amount: f32,
+        width: f32,
+    ) {
+        let active = self.active_id();
+        let a = angle_deg.to_radians();
+        let dir = [a.cos(), a.sin()];
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_stylize(d, q, active, 14, amount, width, dir)
+        });
+        self.force_composite = true;
+    }
+
+    /// Glowing Edges on the active layer: bright coloured edges on black —
+    /// the edge magnitude (boosted by `brightness`) modulates the source colour,
+    /// over a `width`-px step. Flat areas go black.
+    pub(crate) fn do_glowing_edges(
+        &mut self,
+        frame: &mut eframe::Frame,
+        brightness: f32,
+        width: f32,
+    ) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_stylize(d, q, active, 15, brightness, width, [0.0; 2])
+        });
+        self.force_composite = true;
+    }
+
+    /// Diffuse the active layer: a seeded-deterministic anisotropic neighbour
+    /// scramble — each pixel is replaced by a neighbour up to `amount` px away,
+    /// the offset chosen by a hash of (x, y, seed) so the result is stable.
+    pub(crate) fn do_diffuse(&mut self, frame: &mut eframe::Frame, amount: f32, seed: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_stylize(d, q, active, 16, amount, 0.0, [seed, 0.0])
+        });
+        self.force_composite = true;
+    }
 }
 
 #[cfg(test)]

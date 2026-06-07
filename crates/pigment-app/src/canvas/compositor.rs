@@ -250,6 +250,43 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Apply a Stylize edge/relief filter to the active layer. Each is a single
+    /// neighbour-sampling pass over a `width`-px Sobel step (`radius` in the
+    /// shader): Find Edges (kind 13), Emboss (kind 14, `dir` = unit light dir,
+    /// `amount` = relief gain), Glowing Edges (kind 15, `amount` = brightness),
+    /// Diffuse (kind 16, `dir.x` = seed, `amount` = max neighbour displacement
+    /// px, `width` ignored). Single pass; destructive + undoable (region-COW).
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_stylize(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        kind: u32,
+        amount: f32,
+        width: f32,
+        dir: [f32; 2],
+    ) {
+        self.begin_command_now(device, queue, id, "Stylize");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            kind,
+            dir,
+            amount,
+            width,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.
     pub fn composite_now(
         &mut self,

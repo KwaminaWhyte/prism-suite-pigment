@@ -5,18 +5,24 @@ struct FParams {
     // 1 Gaussian blur, 2 sharpen, 3 pixelate, 4 motion blur,
     // 5 box blur (separable), 6 radial spin, 7 radial zoom,
     // 8 twirl, 9 pinch/spherize, 10 ripple/wave, 11 polar (rect->polar),
-    // 12 polar (polar->rect).
+    // 12 polar (polar->rect), 13 find edges, 14 emboss, 15 glowing edges,
+    // 16 diffuse.
     kind: u32,
     _p0: u32,
     _p1: u32,
     _p2: u32,
     texel: vec2<f32>, // 1/size
     dir: vec2<f32>,   // blur direction * texel (Gaussian/box/motion); distort:
-                      // (amplitude_px, wavelength_px) for ripple
+                      // (amplitude_px, wavelength_px) for ripple; emboss:
+                      // (cos angle, sin angle) light direction; diffuse:
+                      // (seed, _)
     amount: f32,      // sharpen amount; radial: spin angle (rad) / zoom fraction;
-                      // twirl: max angle (rad); pinch: signed amount (-1..1)
+                      // twirl: max angle (rad); pinch: signed amount (-1..1);
+                      // emboss: height/relief gain; glowing edges: brightness;
+                      // diffuse: max neighbour displacement in pixels
     radius: f32,      // blur radius / pixelate block / motion taps / radial
-                      // samples; distort: effect radius in pixels
+                      // samples; distort: effect radius in pixels; stylize:
+                      // edge sampling width in pixels
     center: vec2<f32>, // radial/distort center in uv (0..1)
 };
 
@@ -128,7 +134,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             n = n + 1.0;
         }
         return sum / max(n, 1.0);
-    } else {
+    } else if p.kind >= 8u && p.kind <= 12u {
         // ---- Distort filters: per-pixel coordinate remap + edge-clamped
         // sample of the source. All work in *pixel* space about the center so
         // the warp is geometric (non-square pixels handled by mapping uv->px).
@@ -188,5 +194,68 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             spx = vec2<f32>((theta / 6.28318530718) * dim.x, (rr / maxr) * dim.y);
         }
         return textureSample(input, samp, spx * p.texel);
+    } else if p.kind == 16u {
+        // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
+        // swap. Replace each pixel with one of its neighbours within `amount`
+        // px, the offset chosen by a hash of (x, y, seed) — so it's a stable,
+        // reproducible scramble (no temporal noise), unlike a random()-per-frame.
+        let dim = 1.0 / p.texel;
+        let px = in.uv * dim;
+        let ix = floor(px.x);
+        let iy = floor(px.y);
+        // Integer hash → two angles in [0, 2π); pick a direction + distance.
+        let seed = p.dir.x;
+        let hf = fract(sin(dot(vec2<f32>(ix, iy), vec2<f32>(12.9898, 78.233)) + seed) * 43758.5453);
+        let hg = fract(sin(dot(vec2<f32>(ix, iy), vec2<f32>(39.3468, 11.135)) + seed) * 24634.6345);
+        let ang = hf * 6.28318530718;
+        let dist = hg * max(p.amount, 0.0);
+        let off = vec2<f32>(cos(ang), sin(ang)) * dist;
+        return textureSample(input, samp, (px + off) * p.texel);
+    } else {
+        // ---- Stylize edge filters (kinds 13/14/15): Sobel gradient over a
+        // `radius`-px sampling step. Work in the linear-premultiplied source.
+        let w = max(p.radius, 1.0);
+        let ox = vec2<f32>(p.texel.x * w, 0.0);
+        let oy = vec2<f32>(0.0, p.texel.y * w);
+        let tl = textureSample(input, samp, in.uv - ox - oy);
+        let tc = textureSample(input, samp, in.uv - oy);
+        let tr = textureSample(input, samp, in.uv + ox - oy);
+        let ml = textureSample(input, samp, in.uv - ox);
+        let mc = textureSample(input, samp, in.uv);
+        let mr = textureSample(input, samp, in.uv + ox);
+        let bl = textureSample(input, samp, in.uv - ox + oy);
+        let bc = textureSample(input, samp, in.uv + oy);
+        let br = textureSample(input, samp, in.uv + ox + oy);
+        // Rec.709 luma of each (premultiplied) tap.
+        let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+        let l_tl = dot(tl.rgb, lw); let l_tc = dot(tc.rgb, lw); let l_tr = dot(tr.rgb, lw);
+        let l_ml = dot(ml.rgb, lw);                              let l_mr = dot(mr.rgb, lw);
+        let l_bl = dot(bl.rgb, lw); let l_bc = dot(bc.rgb, lw); let l_br = dot(br.rgb, lw);
+        // Sobel kernels.
+        let gx = (l_tr + 2.0 * l_mr + l_br) - (l_tl + 2.0 * l_ml + l_bl);
+        let gy = (l_bl + 2.0 * l_bc + l_br) - (l_tl + 2.0 * l_tc + l_tr);
+        let mag = sqrt(gx * gx + gy * gy);
+        if p.kind == 13u {
+            // Find Edges: white background, dark edges (PS-style). Invert the
+            // gradient magnitude → high edges go dark. Keep the source alpha.
+            let v = clamp(1.0 - mag, 0.0, 1.0);
+            return vec4<f32>(v * mc.a, v * mc.a, v * mc.a, mc.a);
+        } else if p.kind == 14u {
+            // Emboss: directional gray relief. Project the gradient onto the
+            // light direction (p.dir = unit (cos,sin)); mid-gray + signed slope.
+            let g = vec2<f32>(gx, gy);
+            let v = clamp(0.5 + dot(g, p.dir) * p.amount, 0.0, 1.0);
+            return vec4<f32>(v * mc.a, v * mc.a, v * mc.a, mc.a);
+        } else {
+            // Glowing Edges (kind 15): bright coloured edges on black. Scale the
+            // center colour by the (boosted) edge magnitude → edges glow, flats
+            // go black. amount = brightness gain.
+            let g = clamp(mag * p.amount, 0.0, 1.0);
+            // Recover an unpremultiplied edge colour, then re-premultiply by the
+            // edge strength so the result is a glowing, alpha-consistent edge.
+            let base = mc.rgb / max(mc.a, 1e-4);
+            let col = base * g;
+            return vec4<f32>(col * mc.a, mc.a);
+        }
     }
 }

@@ -258,6 +258,68 @@ impl eframe::App for PigmentApp {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button("Stylize", |ui| {
+                        // Find Edges (Sobel magnitude inverted → dark edges on white).
+                        ui.add(
+                            egui::Slider::new(&mut self.edge_width, 1.0..=8.0)
+                                .text("edge width"),
+                        );
+                        if ui.button("Find Edges").clicked() {
+                            self.do_find_edges(frame, self.edge_width);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Emboss (directional gray relief: angle + height/amount).
+                        ui.add(
+                            egui::Slider::new(&mut self.emboss_angle, -180.0..=180.0)
+                                .text("emboss angle°"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.emboss_amount, 0.1..=20.0)
+                                .text("height/amount"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.emboss_width, 1.0..=8.0)
+                                .text("emboss width"),
+                        );
+                        if ui.button("Emboss").clicked() {
+                            self.do_emboss(
+                                frame,
+                                self.emboss_angle,
+                                self.emboss_amount,
+                                self.emboss_width,
+                            );
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Glowing Edges (bright colored edges on black).
+                        ui.add(
+                            egui::Slider::new(&mut self.glow_brightness, 0.5..=20.0)
+                                .text("brightness"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.glow_width, 1.0..=8.0)
+                                .text("edge width"),
+                        );
+                        if ui.button("Glowing Edges").clicked() {
+                            self.do_glowing_edges(frame, self.glow_brightness, self.glow_width);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Diffuse (seeded-deterministic neighbour scramble).
+                        ui.add(
+                            egui::Slider::new(&mut self.diffuse_amount, 0.0..=32.0)
+                                .text("amount"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.diffuse_seed, 0.0..=100.0)
+                                .text("seed"),
+                        );
+                        if ui.button("Diffuse").clicked() {
+                            self.do_diffuse(frame, self.diffuse_amount, self.diffuse_seed);
+                            ui.close_menu();
+                        }
+                    });
                 });
                 ui.menu_button("Select", |ui| {
                     if ui.button("All").clicked() {

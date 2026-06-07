@@ -297,6 +297,15 @@ pub struct PigmentApp {
     ripple_amplitude: f32,  // pixels
     ripple_wavelength: f32, // pixels
     polar_to_polar: bool,   // true = rect->polar, false = polar->rect
+    // Stylize family (Phase 8).
+    edge_width: f32,        // Sobel sampling step (px) for Find Edges
+    emboss_angle: f32,      // degrees
+    emboss_amount: f32,     // relief gain
+    emboss_width: f32,      // Sobel sampling step (px)
+    glow_brightness: f32,   // glowing-edges brightness gain
+    glow_width: f32,        // Sobel sampling step (px)
+    diffuse_amount: f32,    // max neighbour displacement (px)
+    diffuse_seed: f32,      // deterministic scramble seed
 
     hist: Option<Histogram>,
 
@@ -429,6 +438,14 @@ impl PigmentApp {
             ripple_amplitude: 8.0,
             ripple_wavelength: 40.0,
             polar_to_polar: true,
+            edge_width: 1.0,
+            emboss_angle: 135.0,
+            emboss_amount: 4.0,
+            emboss_width: 1.0,
+            glow_brightness: 6.0,
+            glow_width: 1.0,
+            diffuse_amount: 4.0,
+            diffuse_seed: 1.0,
             hist: None,
             gen_fp: HashMap::new(),
             shape_drag: None,
