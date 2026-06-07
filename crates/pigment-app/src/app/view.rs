@@ -205,6 +205,59 @@ impl eframe::App for PigmentApp {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button("Distort", |ui| {
+                        // Twirl (angle + radius about the canvas center).
+                        ui.add(
+                            egui::Slider::new(&mut self.twirl_angle, -360.0..=360.0)
+                                .text("twirl angle°"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.twirl_radius, 1.0..=1000.0)
+                                .text("twirl radius"),
+                        );
+                        if ui.button("Twirl").clicked() {
+                            self.do_twirl(frame, self.twirl_angle, self.twirl_radius);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Pinch (+) / Spherize-bulge (−), signed amount + radius.
+                        ui.add(
+                            egui::Slider::new(&mut self.pinch_amount, -1.0..=1.0)
+                                .text("pinch (− bulge)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.pinch_radius, 1.0..=1000.0)
+                                .text("pinch radius"),
+                        );
+                        if ui.button("Pinch / Spherize").clicked() {
+                            self.do_pinch(frame, self.pinch_amount, self.pinch_radius);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Ripple / Wave (amplitude + wavelength).
+                        ui.add(
+                            egui::Slider::new(&mut self.ripple_amplitude, 0.0..=64.0)
+                                .text("amplitude"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.ripple_wavelength, 2.0..=200.0)
+                                .text("wavelength"),
+                        );
+                        if ui.button("Ripple / Wave").clicked() {
+                            self.do_ripple(frame, self.ripple_amplitude, self.ripple_wavelength);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Polar Coordinates (rectangular <-> polar).
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.polar_to_polar, true, "Rect→Polar");
+                            ui.selectable_value(&mut self.polar_to_polar, false, "Polar→Rect");
+                        });
+                        if ui.button("Polar Coordinates").clicked() {
+                            self.do_polar(frame, self.polar_to_polar);
+                            ui.close_menu();
+                        }
+                    });
                 });
                 ui.menu_button("Select", |ui| {
                     if ui.button("All").clicked() {

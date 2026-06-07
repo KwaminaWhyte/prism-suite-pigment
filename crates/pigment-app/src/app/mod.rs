@@ -289,6 +289,14 @@ pub struct PigmentApp {
     radial_amount: f32, // spin: degrees; zoom: percent
     radial_samples: u32,
     radial_spin: bool, // true = spin, false = zoom
+    // Distort family (Phase 8).
+    twirl_angle: f32,       // degrees
+    twirl_radius: f32,      // pixels
+    pinch_amount: f32,      // signed: + pinch, - bulge
+    pinch_radius: f32,      // pixels
+    ripple_amplitude: f32,  // pixels
+    ripple_wavelength: f32, // pixels
+    polar_to_polar: bool,   // true = rect->polar, false = polar->rect
 
     hist: Option<Histogram>,
 
@@ -414,6 +422,13 @@ impl PigmentApp {
             radial_amount: 15.0,
             radial_samples: 24,
             radial_spin: true,
+            twirl_angle: 90.0,
+            twirl_radius: 200.0,
+            pinch_amount: 0.5,
+            pinch_radius: 200.0,
+            ripple_amplitude: 8.0,
+            ripple_wavelength: 40.0,
+            polar_to_polar: true,
             hist: None,
             gen_fp: HashMap::new(),
             shape_drag: None,

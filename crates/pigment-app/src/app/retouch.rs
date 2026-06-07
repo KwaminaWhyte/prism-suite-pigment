@@ -549,6 +549,57 @@ impl PigmentApp {
         });
         self.force_composite = true;
     }
+
+    /// Twirl the active layer about its center: rotate by up to `angle_deg`,
+    /// falling off to 0 at `radius` pixels.
+    pub(crate) fn do_twirl(&mut self, frame: &mut eframe::Frame, angle_deg: f32, radius: f32) {
+        let active = self.active_id();
+        let cx = self.doc.size.width as f32 * 0.5;
+        let cy = self.doc.size.height as f32 * 0.5;
+        let angle = angle_deg.to_radians();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_distort(d, q, active, 8, cx, cy, angle, radius, [0.0; 2])
+        });
+        self.force_composite = true;
+    }
+
+    /// Pinch (`amount` > 0, toward center) / Spherize-bulge (`amount` < 0,
+    /// outward) the active layer about its center within `radius` pixels.
+    /// `amount` is a signed strength in roughly -1..1.
+    pub(crate) fn do_pinch(&mut self, frame: &mut eframe::Frame, amount: f32, radius: f32) {
+        let active = self.active_id();
+        let cx = self.doc.size.width as f32 * 0.5;
+        let cy = self.doc.size.height as f32 * 0.5;
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_distort(d, q, active, 9, cx, cy, amount, radius, [0.0; 2])
+        });
+        self.force_composite = true;
+    }
+
+    /// Ripple/Wave the active layer: sinusoidal displacement with `amplitude`
+    /// pixels at `wavelength` pixels (each axis offset by a sine of the other).
+    pub(crate) fn do_ripple(&mut self, frame: &mut eframe::Frame, amplitude: f32, wavelength: f32) {
+        let active = self.active_id();
+        let cx = self.doc.size.width as f32 * 0.5;
+        let cy = self.doc.size.height as f32 * 0.5;
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_distort(d, q, active, 10, cx, cy, 0.0, 0.0, [amplitude, wavelength])
+        });
+        self.force_composite = true;
+    }
+
+    /// Polar Coordinates on the active layer: rectangular→polar (`to_polar`
+    /// true) or polar→rectangular (false), about the canvas center.
+    pub(crate) fn do_polar(&mut self, frame: &mut eframe::Frame, to_polar: bool) {
+        let active = self.active_id();
+        let cx = self.doc.size.width as f32 * 0.5;
+        let cy = self.doc.size.height as f32 * 0.5;
+        let kind = if to_polar { 11 } else { 12 };
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_distort(d, q, active, kind, cx, cy, 0.0, 0.0, [0.0; 2])
+        });
+        self.force_composite = true;
+    }
 }
 
 #[cfg(test)]

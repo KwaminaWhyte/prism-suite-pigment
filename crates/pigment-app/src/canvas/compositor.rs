@@ -207,6 +207,49 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Apply a coordinate-displacement Distort filter about `(cx, cy)` (pixel
+    /// coords). Each Distort kind remaps the sampled source coordinate per pixel
+    /// and edge-clamps: Twirl (kind 8, `amount` = max angle rad, `radius` px),
+    /// Pinch/Spherize (kind 9, signed `amount`, `radius` px), Ripple/Wave (kind
+    /// 10, `dir` = `[amplitude_px, wavelength_px]`), Polar rect→polar (kind 11)
+    /// and polar→rect (kind 12). Single pass; destructive + undoable.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_distort(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        kind: u32,
+        cx: f32,
+        cy: f32,
+        amount: f32,
+        radius: f32,
+        dir: [f32; 2],
+    ) {
+        self.begin_command_now(device, queue, id, "Distort");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        let center = [
+            cx / self.canvas_size.width as f32,
+            cy / self.canvas_size.height as f32,
+        ];
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            kind,
+            dir,
+            amount,
+            radius,
+            center,
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.
     pub fn composite_now(
         &mut self,

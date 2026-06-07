@@ -3,16 +3,21 @@
 
 struct FParams {
     // 1 Gaussian blur, 2 sharpen, 3 pixelate, 4 motion blur,
-    // 5 box blur (separable), 6 radial spin, 7 radial zoom.
+    // 5 box blur (separable), 6 radial spin, 7 radial zoom,
+    // 8 twirl, 9 pinch/spherize, 10 ripple/wave, 11 polar (rect->polar),
+    // 12 polar (polar->rect).
     kind: u32,
     _p0: u32,
     _p1: u32,
     _p2: u32,
     texel: vec2<f32>, // 1/size
-    dir: vec2<f32>,   // blur direction * texel (Gaussian/box/motion)
-    amount: f32,      // sharpen amount; radial: spin angle (rad) / zoom fraction
-    radius: f32,      // blur radius / pixelate block / motion taps / radial samples
-    center: vec2<f32>, // radial center in uv (0..1)
+    dir: vec2<f32>,   // blur direction * texel (Gaussian/box/motion); distort:
+                      // (amplitude_px, wavelength_px) for ripple
+    amount: f32,      // sharpen amount; radial: spin angle (rad) / zoom fraction;
+                      // twirl: max angle (rad); pinch: signed amount (-1..1)
+    radius: f32,      // blur radius / pixelate block / motion taps / radial
+                      // samples; distort: effect radius in pixels
+    center: vec2<f32>, // radial/distort center in uv (0..1)
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -87,7 +92,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             n = n + 1.0;
         }
         return sum / max(n, 1.0);
-    } else {
+    } else if p.kind == 6u || p.kind == 7u {
         // Radial blur — Spin (kind 6, rotate about center) or Zoom (kind 7,
         // scale toward/from center). Average `radius` taps spread over the
         // arc/ray so amount 0 is identity.
@@ -123,5 +128,65 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             n = n + 1.0;
         }
         return sum / max(n, 1.0);
+    } else {
+        // ---- Distort filters: per-pixel coordinate remap + edge-clamped
+        // sample of the source. All work in *pixel* space about the center so
+        // the warp is geometric (non-square pixels handled by mapping uv->px).
+        let dim = 1.0 / p.texel;                 // (w, h) in px
+        let cpx = p.center * dim;                 // center in px
+        let px = in.uv * dim;                     // this pixel in px
+        var spx = px;                            // source pixel to sample
+        if p.kind == 8u {
+            // Twirl: rotate about the center by an angle that falls off to 0 at
+            // `radius`. Inside the radius only; outside is identity.
+            let d = px - cpx;
+            let dist = length(d);
+            if dist < p.radius && p.radius > 0.0 {
+                let falloff = 1.0 - dist / p.radius;
+                let a = p.amount * falloff * falloff;
+                let ca = cos(a);
+                let sa = sin(a);
+                // Inverse-map: sample the source rotated by -a so the image
+                // appears rotated by +a.
+                spx = cpx + vec2<f32>(d.x * ca + d.y * sa, -d.x * sa + d.y * ca);
+            }
+        } else if p.kind == 9u {
+            // Pinch (amount > 0, pulls toward center) / Spherize-bulge
+            // (amount < 0, pushes outward). Smooth radial falloff to `radius`.
+            let d = px - cpx;
+            let dist = length(d);
+            if dist < p.radius && p.radius > 0.0 && dist > 1e-4 {
+                let nd = dist / p.radius;        // 0 at center .. 1 at edge
+                // Scale source radius: pinch maps the sample inward.
+                let s = pow(nd, 1.0 + p.amount);
+                spx = cpx + d * (s / nd);
+            }
+        } else if p.kind == 10u {
+            // Ripple / Wave: sinusoidal displacement. dir = (amplitude_px,
+            // wavelength_px); offset each axis by a sine of the *other* axis.
+            let amp = p.dir.x;
+            let wl = max(p.dir.y, 1e-3);
+            let k = 6.28318530718 / wl;
+            spx = px + vec2<f32>(amp * sin(px.y * k), amp * sin(px.x * k));
+        } else if p.kind == 11u {
+            // Rectangular -> Polar. Map the output's (x = angle, y = radius)
+            // back to a cartesian source coordinate. x spans 0..2π over the
+            // width; y spans 0..maxR over the height (0 at top = center).
+            let maxr = min(dim.x, dim.y) * 0.5;
+            let theta = (px.x / dim.x) * 6.28318530718 - 1.5707963268; // start at top
+            let rr = (px.y / dim.y) * maxr;
+            spx = cpx + vec2<f32>(rr * cos(theta), rr * sin(theta));
+        } else {
+            // kind 12u: Polar -> Rectangular. Map the cartesian output back to
+            // the polar layout the forward pass produced (inverse of kind 11).
+            let maxr = min(dim.x, dim.y) * 0.5;
+            let d = px - cpx;
+            var theta = atan2(d.y, d.x) + 1.5707963268;
+            if theta < 0.0 { theta = theta + 6.28318530718; }
+            if theta >= 6.28318530718 { theta = theta - 6.28318530718; }
+            let rr = length(d);
+            spx = vec2<f32>((theta / 6.28318530718) * dim.x, (rr / maxr) * dim.y);
+        }
+        return textureSample(input, samp, spx * p.texel);
     }
 }

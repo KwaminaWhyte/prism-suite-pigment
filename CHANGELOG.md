@@ -7,6 +7,40 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Distort filters — Twirl, Pinch/Spherize, Ripple/Wave, Polar Coordinates**
+  (Phase 8). Four new destructive coordinate-displacement filters, wired through
+  the exact existing filter pattern (GPU shader pass keyed by `kind` in
+  `filter.wgsl` → `apply_distort` on the compositor → `do_*` in the app →
+  Filter ▸ Distort menu → tests), all undoable (region-COW) like the existing
+  blur / Gaussian / Sharpen / Pixelate filters. Each is a per-pixel
+  coordinate-remap sampling filter (sample the source at a displaced coordinate,
+  edge-clamp), working in pixel space about the canvas center.
+  **Twirl** (kind 8) — rotates the image about the center by up to an `angle`,
+  falling off quadratically to 0 at `radius` (untouched outside). **Pinch /
+  Spherize** (kind 9) — a signed radial remap: positive pulls toward the center
+  (pinch), negative pushes outward (spherize/bulge), with a smooth falloff to
+  `radius`. **Ripple / Wave** (kind 10) — sinusoidal displacement where each axis
+  is offset by a sine of the other, parameterised by `amplitude` (px) and
+  `wavelength` (px). **Polar Coordinates** (kinds 11/12) — rectangular→polar
+  (x = angle, y = radius) and the inverse polar→rectangular, an exact (modulo
+  resampling) round-trip pair. A new **Filter ▸ Distort** submenu hosts the four
+  with their parameter sliders (twirl angle + radius; pinch signed amount +
+  radius; ripple amplitude + wavelength; polar rect↔polar toggle). All reuse the
+  existing edge-clamped filter sampler and run in linear-premultiplied working
+  space. Tests: the test-only `canvas::filter_math` CPU reference module gains
+  the four remaps with **13 new deterministic unit tests** — twirl identity at
+  angle 0 / outside-radius + center fixed / rotates a probe off its column /
+  determinism, pinch identity at amount 0 / signed-opposite displacement /
+  center fixed, ripple identity at amplitude 0 / wavelength periodicity /
+  non-trivial warp, polar round-trip recovery + radius→rows mapping +
+  determinism — plus **4 new headless-GPU pixel tests** (`twirl_rotates_within_
+  radius`, `pinch_and_bulge_are_signed`, `ripple_is_periodic`,
+  `polar_round_trips`) mirroring the existing GPU filter-test pattern. App test
+  count 66 → 83. No shared-crate changes (raster-only, pigment-app per PLAN §0a).
+  *Still open (Phase 8 distort backlog):* Warp (mesh + presets), Shear, Displace
+  (displacement map), Lens Correction (`lensfun`), Adaptive Wide Angle,
+  on-canvas center/handle UI, selection-clipped distort, non-destructive
+  smart-filter form.
 - **Blur family filters — Motion, Box, Radial** (Phase 8). Three new
   destructive blur filters, wired through the exact existing filter pattern
   (GPU shader pass keyed by `kind` in `filter.wgsl` → `apply_*` on the
