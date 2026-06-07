@@ -47,6 +47,25 @@ pub struct LayerDraw {
     /// Color-overlay layer style (a = strength).
     pub has_overlay: bool,
     pub overlay_color: [f32; 4],
+    /// Inner-shadow layer style.
+    pub has_inner_shadow: bool,
+    pub inner_shadow_color: [f32; 4],
+    pub inner_shadow_offset: [f32; 2], // uv units
+    pub inner_shadow_blur: f32,        // uv units
+    /// Outer-glow layer style.
+    pub has_outer_glow: bool,
+    pub outer_glow_color: [f32; 4],
+    pub outer_glow_size: f32, // uv units
+    /// Inner-glow layer style.
+    pub has_inner_glow: bool,
+    pub inner_glow_color: [f32; 4],
+    pub inner_glow_size: f32, // uv units
+    /// Gradient-overlay layer style.
+    pub has_grad_overlay: bool,
+    pub grad_color0: [f32; 4],
+    pub grad_color1: [f32; 4],
+    pub grad_angle: f32,   // radians
+    pub grad_opacity: f32, // 0..1
 }
 
 /// A selection operation requested by the app for this frame.
@@ -145,9 +164,23 @@ struct CompositeParams {
     shadow_blur: f32,        // shadow softness radius, uv units
     shadow_off: [f32; 2],    // shadow offset, uv units
     shadow_color: [f32; 4],  // straight rgba
-    has_overlay: u32,        // color-overlay layer style
-    _ov: [u32; 3],           // pad to vec4 alignment
-    overlay_color: [f32; 4], // straight rgba (a = strength)
+    has_overlay: u32,             // color-overlay layer style
+    has_inner_shadow: u32,        // inner-shadow layer style
+    has_outer_glow: u32,          // outer-glow layer style
+    has_inner_glow: u32,          // inner-glow layer style
+    overlay_color: [f32; 4],      // straight rgba (a = strength)
+    inner_shadow_color: [f32; 4], // straight rgba
+    inner_shadow_off: [f32; 2],   // uv units
+    inner_shadow_blur: f32,       // uv units
+    outer_glow_size: f32,         // uv units
+    outer_glow_color: [f32; 4],   // straight rgba
+    inner_glow_color: [f32; 4],   // straight rgba
+    inner_glow_size: f32,         // uv units
+    has_grad_overlay: u32,        // gradient-overlay layer style
+    grad_angle: f32,              // radians
+    grad_opacity: f32,            // 0..1
+    grad_color0: [f32; 4],        // straight rgb (a unused)
+    grad_color1: [f32; 4],        // straight rgb (a unused)
 }
 
 impl CompositeParams {
@@ -172,11 +205,34 @@ impl CompositeParams {
             shadow_off: [0.0; 2],
             shadow_color: [0.0; 4],
             has_overlay: 0,
-            _ov: [0; 3],
+            has_inner_shadow: 0,
+            has_outer_glow: 0,
+            has_inner_glow: 0,
             overlay_color: [0.0; 4],
+            inner_shadow_color: [0.0; 4],
+            inner_shadow_off: [0.0; 2],
+            inner_shadow_blur: 0.0,
+            outer_glow_size: 0.0,
+            outer_glow_color: [0.0; 4],
+            inner_glow_color: [0.0; 4],
+            inner_glow_size: 0.0,
+            has_grad_overlay: 0,
+            grad_angle: 0.0,
+            grad_opacity: 0.0,
+            grad_color0: [0.0; 4],
+            grad_color1: [0.0; 4],
         }
     }
 }
+
+// The compositor binds CompositeParams via dynamic-offset slots spaced by
+// PARAMS_STRIDE, so the struct must fit within one slot. It must also be a
+// multiple of 16 bytes to match the WGSL std140 uniform layout exactly. Both
+// are compile-time invariants.
+const _: () = {
+    assert!(std::mem::size_of::<CompositeParams>() as u64 <= PARAMS_STRIDE);
+    assert!(std::mem::size_of::<CompositeParams>().is_multiple_of(16));
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -214,7 +270,10 @@ const SEL_FMT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 /// Width of a Curves tone-curve LUT (256 input levels, 1px tall, Rgba16Float).
 const LUT_W: u32 = 256;
 const MAX_LAYERS: u64 = 64;
-const PARAMS_STRIDE: u64 = 256; // min uniform dynamic-offset alignment
+// Dynamic-offset alignment must be a multiple of 256; CompositeParams grew past
+// 256 bytes once the full layer-style set landed (currently 288), so the slot
+// stride is 512. A compile-time assert (see tests) guards this invariant.
+const PARAMS_STRIDE: u64 = 512;
 const UNDO_MAX: usize = 32;
 /// Params slot reserved for the wet stroke (last slot in the buffer).
 const WET_PARAMS_OFFSET: u32 = ((MAX_LAYERS - 1) * PARAMS_STRIDE) as u32;

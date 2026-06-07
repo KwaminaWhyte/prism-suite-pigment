@@ -7,6 +7,19 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Layer styles: Inner Shadow, Outer Glow, Inner Glow, Gradient Overlay**
+  (Phase 7). Four more non-destructive layer FX evaluated live in the compositor,
+  reusing the Drop-Shadow / Stroke alpha-neighborhood machinery. **Inner Shadow**
+  casts a blurred, offset copy of the layer's *inverse* alpha clipped to its own
+  coverage (dark band inside the edge). **Outer Glow** halos a centered, soft
+  colored copy of the alpha outward; **Inner Glow** tints inward from the edge.
+  **Gradient Overlay** recolors the layer's fill with an angled two-color linear
+  gradient at adjustable opacity. Per-layer controls (color / offset / blur / size
+  / angle / opacity as each needs); four GPU pixel tests. With Stroke, Drop
+  Shadow, and Color Overlay this rounds out the common PS layer-style set —
+  **Bevel & Emboss** is the one remaining gap. (`CompositeParams` outgrew the
+  256-byte uniform slot at 288 bytes, so `PARAMS_STRIDE` is now 512, guarded by a
+  compile-time size/alignment assert.)
 - **Patch tool** (Phase 6 retouch). Lasso/freehand-select a region and drag it to
   a source area; on release a gradient-domain Poisson solve
   (`prism_core::heal::seamless_clone`) transplants the source's *texture* into the

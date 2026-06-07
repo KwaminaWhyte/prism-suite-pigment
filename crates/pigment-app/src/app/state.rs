@@ -210,6 +210,26 @@ impl PigmentApp {
                     v.to_bits().hash(&mut h);
                 }
             }
+            if let Some((c, o, b)) = self.layer_inner_shadows.get(&l.id) {
+                for v in c.iter().chain(o.iter()).chain(std::iter::once(b)) {
+                    v.to_bits().hash(&mut h);
+                }
+            }
+            if let Some((c, sz)) = self.layer_outer_glows.get(&l.id) {
+                for v in c.iter().chain(std::iter::once(sz)) {
+                    v.to_bits().hash(&mut h);
+                }
+            }
+            if let Some((c, sz)) = self.layer_inner_glows.get(&l.id) {
+                for v in c.iter().chain(std::iter::once(sz)) {
+                    v.to_bits().hash(&mut h);
+                }
+            }
+            if let Some((a, b, ang, op)) = self.layer_grad_overlays.get(&l.id) {
+                for v in a.iter().chain(b.iter()).chain([ang, op]) {
+                    v.to_bits().hash(&mut h);
+                }
+            }
         }
         h.finish()
     }
@@ -232,6 +252,10 @@ impl PigmentApp {
                 let stroke = self.layer_strokes.get(&l.id);
                 let shadow = self.layer_shadows.get(&l.id);
                 let overlay = self.layer_overlays.get(&l.id).copied();
+                let inner_shadow = self.layer_inner_shadows.get(&l.id);
+                let outer_glow = self.layer_outer_glows.get(&l.id);
+                let inner_glow = self.layer_inner_glows.get(&l.id);
+                let grad = self.layer_grad_overlays.get(&l.id);
                 let cw = self.doc.size.width.max(1) as f32;
                 LayerDraw {
                     id: l.id,
@@ -254,6 +278,23 @@ impl PigmentApp {
                     shadow_blur: shadow.map(|(_, _, b)| *b / cw).unwrap_or(0.0),
                     has_overlay: overlay.is_some(),
                     overlay_color: overlay.unwrap_or([0.0; 4]),
+                    has_inner_shadow: inner_shadow.is_some(),
+                    inner_shadow_color: inner_shadow.map(|(c, _, _)| *c).unwrap_or([0.0; 4]),
+                    inner_shadow_offset: inner_shadow
+                        .map(|(_, o, _)| [o[0] / cw, o[1] / cw])
+                        .unwrap_or([0.0; 2]),
+                    inner_shadow_blur: inner_shadow.map(|(_, _, b)| *b / cw).unwrap_or(0.0),
+                    has_outer_glow: outer_glow.is_some(),
+                    outer_glow_color: outer_glow.map(|(c, _)| *c).unwrap_or([0.0; 4]),
+                    outer_glow_size: outer_glow.map(|(_, sz)| *sz / cw).unwrap_or(0.0),
+                    has_inner_glow: inner_glow.is_some(),
+                    inner_glow_color: inner_glow.map(|(c, _)| *c).unwrap_or([0.0; 4]),
+                    inner_glow_size: inner_glow.map(|(_, sz)| *sz / cw).unwrap_or(0.0),
+                    has_grad_overlay: grad.is_some(),
+                    grad_color0: grad.map(|(a, _, _, _)| *a).unwrap_or([0.0; 4]),
+                    grad_color1: grad.map(|(_, b, _, _)| *b).unwrap_or([0.0; 4]),
+                    grad_angle: grad.map(|(_, _, a, _)| a.to_radians()).unwrap_or(0.0),
+                    grad_opacity: grad.map(|(_, _, _, o)| *o).unwrap_or(0.0),
                 }
             })
             .collect()

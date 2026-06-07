@@ -185,6 +185,29 @@ impl CanvasGpu {
                 p.has_overlay = 1;
                 p.overlay_color = l.overlay_color;
             }
+            if l.has_grad_overlay {
+                p.has_grad_overlay = 1;
+                p.grad_color0 = l.grad_color0;
+                p.grad_color1 = l.grad_color1;
+                p.grad_angle = l.grad_angle;
+                p.grad_opacity = l.grad_opacity;
+            }
+            if l.has_inner_shadow {
+                p.has_inner_shadow = 1;
+                p.inner_shadow_color = l.inner_shadow_color;
+                p.inner_shadow_off = l.inner_shadow_offset;
+                p.inner_shadow_blur = l.inner_shadow_blur;
+            }
+            if l.has_outer_glow {
+                p.has_outer_glow = 1;
+                p.outer_glow_color = l.outer_glow_color;
+                p.outer_glow_size = l.outer_glow_size;
+            }
+            if l.has_inner_glow {
+                p.has_inner_glow = 1;
+                p.inner_glow_color = l.inner_glow_color;
+                p.inner_glow_size = l.inner_glow_size;
+            }
             if self.xform_layer == Some(l.id) {
                 p.has_xform = 1;
                 p.m = self.xform_m;

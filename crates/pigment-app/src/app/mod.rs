@@ -247,6 +247,14 @@ pub struct PigmentApp {
     layer_shadows: HashMap<LayerId, ([f32; 4], [f32; 2], f32)>,
     /// Per-layer color-overlay style: straight rgba (a = strength).
     layer_overlays: HashMap<LayerId, [f32; 4]>,
+    /// Per-layer inner-shadow style: (straight rgba, offset px [dx,dy], blur px).
+    layer_inner_shadows: HashMap<LayerId, ([f32; 4], [f32; 2], f32)>,
+    /// Per-layer outer-glow style: (straight rgba, size px).
+    layer_outer_glows: HashMap<LayerId, ([f32; 4], f32)>,
+    /// Per-layer inner-glow style: (straight rgba, size px).
+    layer_inner_glows: HashMap<LayerId, ([f32; 4], f32)>,
+    /// Per-layer gradient-overlay style: (color0 rgb, color1 rgb, angle deg, opacity).
+    layer_grad_overlays: HashMap<LayerId, ([f32; 4], [f32; 4], f32, f32)>,
     /// Panel visibility (Window menu show/hide).
     panels: PanelVis,
 
@@ -355,6 +363,10 @@ impl PigmentApp {
             layer_strokes: HashMap::new(),
             layer_shadows: HashMap::new(),
             layer_overlays: HashMap::new(),
+            layer_inner_shadows: HashMap::new(),
+            layer_outer_glows: HashMap::new(),
+            layer_inner_glows: HashMap::new(),
+            layer_grad_overlays: HashMap::new(),
             panels: PanelVis::default(),
             edit_mask: false,
             filter_radius: 4.0,

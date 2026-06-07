@@ -107,28 +107,12 @@ impl CanvasGpu {
             return;
         };
         // Bake params live in the wet slot to avoid clashing with composite's slots.
+        // Start from a plain (no-style) param block and turn on the affine only.
         let p = CompositeParams {
-            opacity: 1.0,
-            blend_mode: 0,
             has_xform: 1,
-            adjust_kind: 0,
             m: self.xform_m,
             off: self.xform_off,
-            _p1: [0.0; 2],
-            adjust: [0.0; 4],
-            has_blend_if: 0,
-            has_clip: 0,
-            has_stroke: 0,
-            stroke_w: 0.0,
-            blend_if: [0.0, 1.0, 0.0, 1.0],
-            stroke_color: [0.0; 4],
-            has_shadow: 0,
-            shadow_blur: 0.0,
-            shadow_off: [0.0; 2],
-            shadow_color: [0.0; 4],
-            has_overlay: 0,
-            _ov: [0; 3],
-            overlay_color: [0.0; 4],
+            ..CompositeParams::plain(1.0, 0)
         };
         queue.write_buffer(
             &self.params_buf,

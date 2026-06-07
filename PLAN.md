@@ -270,7 +270,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 - [ ] Tests: gradient-domain heal seam continuity; PatchMatch determinism (seeded); liquify mesh round-trip
 
 ### Phase 7 — Layer power: styles, smart objects, channels  *(non-destructive depth)*
-- [~] **Layer styles / FX** (L): **Stroke + Drop Shadow + Color Overlay done** — non-destructive, evaluated live in the composite shader: outer stroke (alpha-edge ring), drop shadow (blurred/offset/tinted alpha behind), color overlay (recolor covered pixels by strength); per-layer params, GPU pixel-tested. *Still:* Inner Shadow, Outer/Inner Glow (glow ≈ shadow with no offset — reuses the sampler), Bevel & Emboss, Gradient/Pattern Overlay, Satin; per-effect blend/opacity; copy/paste/scale styles.
+- [~] **Layer styles / FX** (L): **Stroke + Drop Shadow + Color Overlay + Inner Shadow + Outer Glow + Inner Glow + Gradient Overlay done** — non-destructive, evaluated live in the composite shader: outer stroke (alpha-edge ring), drop shadow (blurred/offset/tinted alpha behind), color overlay (recolor covered pixels by strength), inner shadow (blurred/offset *inverse*-alpha clipped inside the shape), outer glow (centered soft alpha halo outward), inner glow (soft alpha tint inward from the edge), gradient overlay (angled two-color linear gradient over the fill); per-layer params, GPU pixel-tested (7 style tests total). *Still:* **Bevel & Emboss** (deferred — needs a normal/height pass + light model; the hardest one), Pattern Overlay, Satin; per-effect blend/opacity; copy/paste/scale styles.
 - [ ] **Smart Objects** (L): embedded + linked; wrap any layer/selection; transforms & filters re-applied non-destructively to the source render; "edit contents" → child document; replace-contents; place external (`.pigment`/`.contour`/image/PDF/Pulse-comp via Dynamic Link)
 - [ ] **Smart Filters** (M): any Phase-6/8 filter applied to a smart object stays editable, re-orderable, masked, toggle-able
 - [~] **Clipping masks** (S) **done** — a layer clips to the alpha of the layer directly below, gated in the composite shader (clip-base texture binding); per-layer toggle + GPU pixel test. *Still:* **vector masks** (M, from Phase 4 pen), **group/nested masks**, mask density/feather, mask panel.
@@ -367,7 +367,7 @@ intentionally a sibling-app concern. Target ≥85% of the *weighted, real-world-
 | Masks | layer masks done; clipping/vector/group + blend-if | **Done** core; rest **Planned** | 3,4,7 |
 | Filters | blur/sharpen/pixelate done; full galleries | **Done** core; rest **Planned** | 3,8 |
 | Retouch / heal / clone / content-aware / liquify | none yet | **Planned** | 6 |
-| Layer styles (FX) | none yet | **Planned** | 7 |
+| Layer styles (FX) | 7 styles done (stroke, drop/inner shadow, outer/inner glow, color/gradient overlay) | **Partial** (Bevel & Emboss, Pattern, Satin left) | 7 |
 | Smart objects / smart filters | none yet | **Planned** | 7 |
 | Channels / alpha / spot | none yet | **Planned** | 7 |
 | Text | basic editable; rich type/OpenType/on-path/warp | **Done** basic; rest **Planned** | 4 |

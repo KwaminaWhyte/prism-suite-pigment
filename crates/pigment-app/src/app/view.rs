@@ -553,6 +553,179 @@ impl eframe::App for PigmentApp {
                             );
 
                             ui.separator();
+                            egui::CollapsingHeader::new("Layer style: Gradient overlay").show(
+                                ui,
+                                |ui| {
+                                    let id = self.active_id();
+                                    let mut on = self.layer_grad_overlays.contains_key(&id);
+                                    if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                                        if on {
+                                            self.layer_grad_overlays.insert(
+                                                id,
+                                                (
+                                                    [0.0, 0.0, 0.0, 1.0],
+                                                    [1.0, 1.0, 1.0, 1.0],
+                                                    0.0,
+                                                    1.0,
+                                                ),
+                                            );
+                                        } else {
+                                            self.layer_grad_overlays.remove(&id);
+                                        }
+                                        self.force_composite = true;
+                                    }
+                                    if let Some((c0, c1, angle, opacity)) =
+                                        self.layer_grad_overlays.get_mut(&id)
+                                    {
+                                        let mut ch = false;
+                                        ui.horizontal(|ui| {
+                                            let mut a = [c0[0], c0[1], c0[2]];
+                                            if ui.color_edit_button_rgb(&mut a).changed() {
+                                                *c0 = [a[0], a[1], a[2], 1.0];
+                                                ch = true;
+                                            }
+                                            ui.label("to");
+                                            let mut b = [c1[0], c1[1], c1[2]];
+                                            if ui.color_edit_button_rgb(&mut b).changed() {
+                                                *c1 = [b[0], b[1], b[2], 1.0];
+                                                ch = true;
+                                            }
+                                        });
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(angle, -180.0..=180.0)
+                                                    .text("angle°"),
+                                            )
+                                            .changed();
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(opacity, 0.0..=1.0)
+                                                    .text("opacity"),
+                                            )
+                                            .changed();
+                                        if ch {
+                                            self.force_composite = true;
+                                        }
+                                    }
+                                },
+                            );
+
+                            ui.separator();
+                            egui::CollapsingHeader::new("Layer style: Inner shadow").show(
+                                ui,
+                                |ui| {
+                                    let id = self.active_id();
+                                    let mut on = self.layer_inner_shadows.contains_key(&id);
+                                    if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                                        if on {
+                                            self.layer_inner_shadows.insert(
+                                                id,
+                                                ([0.0, 0.0, 0.0, 0.7], [4.0, 4.0], 5.0),
+                                            );
+                                        } else {
+                                            self.layer_inner_shadows.remove(&id);
+                                        }
+                                        self.force_composite = true;
+                                    }
+                                    if let Some((color, off, blur)) =
+                                        self.layer_inner_shadows.get_mut(&id)
+                                    {
+                                        let mut rgba = *color;
+                                        if ui
+                                            .color_edit_button_rgba_premultiplied(&mut rgba)
+                                            .changed()
+                                        {
+                                            *color = rgba;
+                                            self.force_composite = true;
+                                        }
+                                        let mut ch = false;
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(&mut off[0], -50.0..=50.0)
+                                                    .text("dx"),
+                                            )
+                                            .changed();
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(&mut off[1], -50.0..=50.0)
+                                                    .text("dy"),
+                                            )
+                                            .changed();
+                                        ch |= ui
+                                            .add(
+                                                egui::Slider::new(blur, 0.0..=40.0).text("blur px"),
+                                            )
+                                            .changed();
+                                        if ch {
+                                            self.force_composite = true;
+                                        }
+                                    }
+                                },
+                            );
+
+                            ui.separator();
+                            egui::CollapsingHeader::new("Layer style: Outer glow").show(ui, |ui| {
+                                let id = self.active_id();
+                                let mut on = self.layer_outer_glows.contains_key(&id);
+                                if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                                    if on {
+                                        self.layer_outer_glows
+                                            .insert(id, ([1.0, 0.85, 0.4, 0.75], 8.0));
+                                    } else {
+                                        self.layer_outer_glows.remove(&id);
+                                    }
+                                    self.force_composite = true;
+                                }
+                                if let Some((color, size)) = self.layer_outer_glows.get_mut(&id) {
+                                    let mut rgba = *color;
+                                    if ui
+                                        .color_edit_button_rgba_premultiplied(&mut rgba)
+                                        .changed()
+                                    {
+                                        *color = rgba;
+                                        self.force_composite = true;
+                                    }
+                                    if ui
+                                        .add(egui::Slider::new(size, 1.0..=40.0).text("size px"))
+                                        .changed()
+                                    {
+                                        self.force_composite = true;
+                                    }
+                                }
+                            });
+
+                            ui.separator();
+                            egui::CollapsingHeader::new("Layer style: Inner glow").show(ui, |ui| {
+                                let id = self.active_id();
+                                let mut on = self.layer_inner_glows.contains_key(&id);
+                                if ui.checkbox(&mut on, "enable (active layer)").changed() {
+                                    if on {
+                                        self.layer_inner_glows
+                                            .insert(id, ([1.0, 0.95, 0.6, 0.75], 8.0));
+                                    } else {
+                                        self.layer_inner_glows.remove(&id);
+                                    }
+                                    self.force_composite = true;
+                                }
+                                if let Some((color, size)) = self.layer_inner_glows.get_mut(&id) {
+                                    let mut rgba = *color;
+                                    if ui
+                                        .color_edit_button_rgba_premultiplied(&mut rgba)
+                                        .changed()
+                                    {
+                                        *color = rgba;
+                                        self.force_composite = true;
+                                    }
+                                    if ui
+                                        .add(egui::Slider::new(size, 1.0..=40.0).text("size px"))
+                                        .changed()
+                                    {
+                                        self.force_composite = true;
+                                    }
+                                }
+                            });
+
+                            ui.separator();
                             egui::CollapsingHeader::new("Channels").show(ui, |ui| {
                                 let names = with_gpu(frame, |gpu, _, _| gpu.channel_names())
                                     .unwrap_or_default();

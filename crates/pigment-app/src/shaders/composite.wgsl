@@ -22,10 +22,22 @@ struct Params {
     shadow_off: vec2<f32>,
     shadow_color: vec4<f32>,
     has_overlay: u32,
-    _ova: u32,
-    _ovb: u32,
-    _ovc: u32,
+    has_inner_shadow: u32,
+    has_outer_glow: u32,
+    has_inner_glow: u32,
     overlay_color: vec4<f32>,
+    inner_shadow_color: vec4<f32>,
+    inner_shadow_off: vec2<f32>,
+    inner_shadow_blur: f32,
+    outer_glow_size: f32,
+    outer_glow_color: vec4<f32>,
+    inner_glow_color: vec4<f32>,
+    inner_glow_size: f32,
+    has_grad_overlay: u32,
+    grad_angle: f32,
+    grad_opacity: f32,
+    grad_color0: vec4<f32>,
+    grad_color1: vec4<f32>,
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -259,6 +271,67 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         s = vec4<f32>(mixed * s.a, s.a);
     }
 
+    // Gradient-overlay layer style: recolor the layer's covered pixels with a
+    // 2-color linear gradient (color0 -> color1) projected along grad_angle, mixed
+    // by grad_opacity. Coordinate t runs 0..1 across the canvas in the gradient dir.
+    if params.has_grad_overlay != 0u {
+        let dir = vec2<f32>(cos(params.grad_angle), sin(params.grad_angle));
+        // Centered projection so 0.5 sits at the canvas middle regardless of angle.
+        let t = clamp(dot(in.uv - vec2<f32>(0.5), dir) + 0.5, 0.0, 1.0);
+        let g = mix(params.grad_color0.rgb, params.grad_color1.rgb, t);
+        let sc0 = s.rgb / max(s.a, 1e-5);
+        let mixed = mix(sc0, g, params.grad_opacity);
+        s = vec4<f32>(mixed * s.a, s.a);
+    }
+
+    // Inner-shadow layer style: a blurred, offset copy of the layer's INVERSE
+    // alpha, clipped to the layer's own coverage, painted over the fill (a dark
+    // edge inside the shape on the offset side).
+    if params.has_inner_shadow != 0u {
+        let own = textureSampleLevel(layer_tex, samp, clamp(luv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        var acc = 1.0 - textureSampleLevel(
+            layer_tex, samp,
+            clamp(luv - params.inner_shadow_off, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0
+        ).a;
+        var n = 1.0;
+        for (var k = 0; k < 16; k = k + 1) {
+            let ang = 6.2831853 * f32(k) / 16.0;
+            let dir = vec2<f32>(cos(ang), sin(ang));
+            for (var rr = 0; rr < 2; rr = rr + 1) {
+                let r = params.inner_shadow_blur * (f32(rr) + 1.0) / 2.0;
+                let suv = clamp(luv - params.inner_shadow_off + dir * r, vec2<f32>(0.0), vec2<f32>(1.0));
+                acc = acc + (1.0 - textureSampleLevel(layer_tex, samp, suv, 0.0).a);
+                n = n + 1.0;
+            }
+        }
+        // Inside coverage: shadow only where the shape is, scaled by own alpha.
+        let cov = clamp(acc / n, 0.0, 1.0) * own * (params.opacity * mask);
+        let ia = params.inner_shadow_color.a * cov;
+        let isc = vec4<f32>(params.inner_shadow_color.rgb * ia, ia); // premultiplied
+        s = vec4<f32>(isc.rgb + s.rgb * (1.0 - isc.a), s.a); // shadow over the fill, keep fill alpha
+    }
+
+    // Inner-glow layer style: a colored glow that fades inward from the shape's
+    // edge. Strength = how much of a neighborhood (radius = glow size) falls
+    // OUTSIDE the shape, clipped to the shape's own coverage.
+    if params.has_inner_glow != 0u {
+        let own = textureSampleLevel(layer_tex, samp, clamp(luv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        var outside = 0.0;
+        for (var k = 0; k < 16; k = k + 1) {
+            let ang = 6.2831853 * f32(k) / 16.0;
+            let dir = vec2<f32>(cos(ang), sin(ang));
+            for (var rr = 0; rr < 3; rr = rr + 1) {
+                let r = params.inner_glow_size * (f32(rr) + 1.0) / 3.0;
+                let suv = clamp(luv + dir * r, vec2<f32>(0.0), vec2<f32>(1.0));
+                outside = max(outside, 1.0 - textureSampleLevel(layer_tex, samp, suv, 0.0).a);
+            }
+        }
+        let cov = outside * own * (params.opacity * mask);
+        let ga = params.inner_glow_color.a * cov;
+        let ig = vec4<f32>(params.inner_glow_color.rgb * ga, ga); // premultiplied
+        s = vec4<f32>(ig.rgb + s.rgb * (1.0 - ig.a), s.a); // glow over the fill, keep fill alpha
+    }
+
     // Outer-stroke layer style: ring of the layer's alpha outside its own edge,
     // tinted by stroke_color, drawn behind the layer (layer composites over it).
     if params.has_stroke != 0u {
@@ -278,6 +351,30 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let st = vec4<f32>(params.stroke_color.rgb * sa_pre, sa_pre); // premultiplied stroke
         // Layer over stroke (stroke shows where the layer's own alpha is low).
         s = vec4<f32>(s.rgb + st.rgb * (1.0 - s.a), s.a + st.a * (1.0 - s.a));
+    }
+
+    // Outer glow: a soft, centered (no offset) colored halo of the layer alpha
+    // expanding outward from the shape's edge, drawn behind the layer.
+    if params.has_outer_glow != 0u {
+        var acc = textureSampleLevel(
+            layer_tex, samp, clamp(luv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0
+        ).a;
+        var n = 1.0;
+        for (var k = 0; k < 16; k = k + 1) {
+            let ang = 6.2831853 * f32(k) / 16.0;
+            let dir = vec2<f32>(cos(ang), sin(ang));
+            for (var rr = 0; rr < 3; rr = rr + 1) {
+                let r = params.outer_glow_size * (f32(rr) + 1.0) / 3.0;
+                let suv = clamp(luv + dir * r, vec2<f32>(0.0), vec2<f32>(1.0));
+                acc = acc + textureSampleLevel(layer_tex, samp, suv, 0.0).a;
+                n = n + 1.0;
+            }
+        }
+        let cov = clamp(acc / n, 0.0, 1.0) * (params.opacity * mask);
+        let ga = params.outer_glow_color.a * cov;
+        let glow = vec4<f32>(params.outer_glow_color.rgb * ga, ga); // premultiplied
+        // Composite the styled layer over the glow.
+        s = vec4<f32>(s.rgb + glow.rgb * (1.0 - s.a), s.a + glow.a * (1.0 - s.a));
     }
 
     // Drop shadow: a blurred, offset copy of the layer alpha, drawn behind.
