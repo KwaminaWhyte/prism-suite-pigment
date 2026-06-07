@@ -65,6 +65,46 @@ pub(crate) fn adjustment_ui(ui: &mut egui::Ui, adj: &mut Adjustment) {
                 ui.color_edit_button_rgb(high);
             });
         }
+        Adjustment::ColorBalance {
+            shadows,
+            midtones,
+            highlights,
+            preserve_luminosity,
+        } => {
+            // Each range gets the three CMY↔RGB sliders Photoshop shows.
+            for (label, range) in [
+                ("Shadows", shadows),
+                ("Midtones", midtones),
+                ("Highlights", highlights),
+            ] {
+                ui.label(label);
+                ui.add(egui::Slider::new(&mut range[0], -1.0..=1.0).text("cyan / red"));
+                ui.add(egui::Slider::new(&mut range[1], -1.0..=1.0).text("magenta / green"));
+                ui.add(egui::Slider::new(&mut range[2], -1.0..=1.0).text("yellow / blue"));
+            }
+            ui.checkbox(preserve_luminosity, "preserve luminosity");
+        }
+        Adjustment::ChannelMixer {
+            r,
+            g,
+            b,
+            monochrome,
+        } => {
+            ui.checkbox(monochrome, "monochrome");
+            // In monochrome mode only the first (gray) row applies.
+            let rows: &mut [(&str, &mut [f32; 4])] = if *monochrome {
+                &mut [("Gray", r)]
+            } else {
+                &mut [("Red", r), ("Green", g), ("Blue", b)]
+            };
+            for (label, row) in rows.iter_mut() {
+                ui.label(*label);
+                ui.add(egui::Slider::new(&mut row[0], -2.0..=2.0).text("red"));
+                ui.add(egui::Slider::new(&mut row[1], -2.0..=2.0).text("green"));
+                ui.add(egui::Slider::new(&mut row[2], -2.0..=2.0).text("blue"));
+                ui.add(egui::Slider::new(&mut row[3], -1.0..=1.0).text("constant"));
+            }
+        }
         Adjustment::Invert | Adjustment::BlackWhite => {
             ui.label("(no parameters)");
         }

@@ -598,7 +598,7 @@ mod patch_tests {
         );
         // A pixel well outside the region is untouched (region-COW: only the
         // masked region changes; undo restores the rest exactly).
-        let outside = (0 * w + 0) * 4;
+        let outside = 0; // pixel (0,0), channel 0
         assert_eq!(out[outside], img[outside]);
     }
 
@@ -657,13 +657,13 @@ mod patch_tests {
         let (w, h) = (6u32, 6u32);
         let mut m = vec![false; (w * h) as usize];
         m[(2 * w + 2) as usize] = true; // (2,2)
-        m[(0 * w + 0) as usize] = true; // (0,0) — will fall off-canvas when shifted up-left
+        m[0] = true; // (0,0) — will fall off-canvas when shifted up-left
         let out = translate_mask(&m, w, h, 1.0, 1.0);
         assert!(out[(3 * w + 3) as usize], "(2,2) → (3,3)");
-        assert!(out[(1 * w + 1) as usize], "(0,0) → (1,1)");
+        assert!(out[(w + 1) as usize], "(0,0) → (1,1)");
         // Shifting up-left drops the (0,0) pixel off-canvas.
         let out2 = translate_mask(&m, w, h, -1.0, -1.0);
-        assert!(out2[(1 * w + 1) as usize], "(2,2) → (1,1)");
+        assert!(out2[(w + 1) as usize], "(2,2) → (1,1)");
         assert_eq!(out2.iter().filter(|&&b| b).count(), 1, "(0,0) clipped away");
     }
 }

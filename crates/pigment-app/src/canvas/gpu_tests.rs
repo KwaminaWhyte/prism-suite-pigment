@@ -30,6 +30,9 @@ fn base_draw(id: LayerId) -> LayerDraw {
         visible: true,
         adjust_kind: 0,
         adjust: [0.0; 4],
+        mix_r: [1.0, 0.0, 0.0, 0.0],
+        mix_g: [0.0, 1.0, 0.0, 0.0],
+        mix_b: [0.0, 0.0, 1.0, 0.0],
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
@@ -108,6 +111,9 @@ fn compositor_brush_wet_undo() {
         visible: true,
         adjust_kind: 0,
         adjust: [0.0; 4],
+        mix_r: [1.0, 0.0, 0.0, 0.0],
+        mix_g: [0.0, 1.0, 0.0, 0.0],
+        mix_b: [0.0, 0.0, 1.0, 0.0],
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
@@ -207,6 +213,9 @@ fn selection_clips_paint() {
         visible: true,
         adjust_kind: 0,
         adjust: [0.0; 4],
+        mix_r: [1.0, 0.0, 0.0, 0.0],
+        mix_g: [0.0, 1.0, 0.0, 0.0],
+        mix_b: [0.0, 0.0, 1.0, 0.0],
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
@@ -329,6 +338,9 @@ fn adjustment_invert() {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -371,6 +383,9 @@ fn adjustment_invert() {
             visible: true,
             adjust_kind: k,
             adjust: p,
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -446,6 +461,9 @@ fn curves_invert_master() {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -488,6 +506,9 @@ fn curves_invert_master() {
             visible: true,
             adjust_kind: 8, // Curves
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -607,6 +628,9 @@ fn posterize_adjustment() {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -649,6 +673,9 @@ fn posterize_adjustment() {
             visible: true,
             adjust_kind: k,
             adjust: p,
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -724,6 +751,9 @@ fn gradient_map_adjustment() {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -766,6 +796,9 @@ fn gradient_map_adjustment() {
             visible: true,
             adjust_kind: k,
             adjust: p,
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -837,6 +870,9 @@ fn blend_if_hides_bright_source() {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -879,6 +915,9 @@ fn blend_if_hides_bright_source() {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: true,
             blend_if: [0.0, 0.45, 0.0, 1.0],
             clipped: false,
@@ -963,6 +1002,9 @@ fn clipping_mask_gates_by_base_alpha() {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: false,
@@ -1005,6 +1047,9 @@ fn clipping_mask_gates_by_base_alpha() {
             visible: true,
             adjust_kind: 0,
             adjust: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
             has_blend_if: false,
             blend_if: [0.0, 1.0, 0.0, 1.0],
             clipped: true,
@@ -1105,6 +1150,9 @@ fn channel_save_load_roundtrip() {
         visible: true,
         adjust_kind: 0,
         adjust: [0.0; 4],
+        mix_r: [1.0, 0.0, 0.0, 0.0],
+        mix_g: [0.0, 1.0, 0.0, 0.0],
+        mix_b: [0.0, 0.0, 1.0, 0.0],
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
@@ -1189,6 +1237,9 @@ fn layer_stroke_outlines_edge() {
         visible: true,
         adjust_kind: 0,
         adjust: [0.0; 4],
+        mix_r: [1.0, 0.0, 0.0, 0.0],
+        mix_g: [0.0, 1.0, 0.0, 0.0],
+        mix_b: [0.0, 0.0, 1.0, 0.0],
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
@@ -1274,6 +1325,9 @@ fn layer_drop_shadow_offsets_behind() {
         visible: true,
         adjust_kind: 0,
         adjust: [0.0; 4],
+        mix_r: [1.0, 0.0, 0.0, 0.0],
+        mix_g: [0.0, 1.0, 0.0, 0.0],
+        mix_b: [0.0, 0.0, 1.0, 0.0],
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
@@ -1343,6 +1397,9 @@ fn layer_color_overlay_recolors() {
         visible: true,
         adjust_kind: 0,
         adjust: [0.0; 4],
+        mix_r: [1.0, 0.0, 0.0, 0.0],
+        mix_g: [0.0, 1.0, 0.0, 0.0],
+        mix_b: [0.0, 0.0, 1.0, 0.0],
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
@@ -1413,6 +1470,9 @@ fn layer_mask_hides() {
         visible: true,
         adjust_kind: 0,
         adjust: [0.0; 4],
+        mix_r: [1.0, 0.0, 0.0, 0.0],
+        mix_g: [0.0, 1.0, 0.0, 0.0],
+        mix_b: [0.0, 0.0, 1.0, 0.0],
         has_blend_if: false,
         blend_if: [0.0, 1.0, 0.0, 1.0],
         clipped: false,
@@ -1659,5 +1719,94 @@ fn layer_bevel_lights_facing_edge() {
     assert!(
         outside[3] < 0.1,
         "bevel never paints outside the shape: {outside:?}"
+    );
+}
+
+// Color Balance: a strong red shadow shift over a dark-gray backdrop lifts the
+// red channel (a per-channel transfer LUT, shader kind 13), leaving the brighter
+// channels comparatively untouched.
+#[test]
+fn color_balance_shadow_red_push() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping color_balance_shadow_red_push");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(8, 8);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    let l1 = LayerId(1);
+    gpu.ensure_layer(&device, l0);
+    gpu.ensure_layer(&device, l1);
+    // Dark gray backdrop so the shadow range dominates the LUT weighting.
+    gpu.upload_layer(&queue, l0, &solid(8, 0.15, 0.15, 0.15, 1.0));
+    gpu.set_color_balance_lut(&device, &queue, l1, [1.0, 0.0, 0.0], [0.0; 3], [0.0; 3]);
+
+    let (k, p) = prism_core::adjust::Adjustment::ColorBalance {
+        shadows: [1.0, 0.0, 0.0],
+        midtones: [0.0; 3],
+        highlights: [0.0; 3],
+        preserve_luminosity: false,
+    }
+    .encode();
+    let order = vec![
+        base_draw(l0),
+        LayerDraw {
+            adjust_kind: k,
+            adjust: p,
+            ..base_draw(l1)
+        },
+    ];
+    let pp = gpu.composite_now(&device, &queue, &order);
+    let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
+    // Composite is linear-premultiplied; 0.15 sRGB ≈ 0.0185 linear. Red must end
+    // up clearly above the (unshifted) green/blue.
+    assert!(
+        px[0] > px[1] + 0.05 && px[0] > px[2] + 0.05,
+        "shadow red push lifts the red channel above green/blue: {px:?}"
+    );
+}
+
+// Channel Mixer: a red↔blue swap matrix (output R = input B, output B = input R)
+// over a pure-red layer yields blue (shader kind 14).
+#[test]
+fn channel_mixer_swaps_red_blue() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping channel_mixer_swaps_red_blue");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(8, 8);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    let l1 = LayerId(1);
+    gpu.ensure_layer(&device, l0);
+    gpu.ensure_layer(&device, l1);
+    gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // pure red
+
+    let adj = prism_core::adjust::Adjustment::ChannelMixer {
+        r: [0.0, 0.0, 1.0, 0.0], // out R = in B
+        g: [0.0, 1.0, 0.0, 0.0], // out G = in G
+        b: [1.0, 0.0, 0.0, 0.0], // out B = in R
+        monochrome: false,
+    };
+    let (k, p) = adj.encode();
+    let m = adj.channel_mixer_matrix().unwrap();
+    let order = vec![
+        base_draw(l0),
+        LayerDraw {
+            adjust_kind: k,
+            adjust: p,
+            mix_r: m.r,
+            mix_g: m.g,
+            mix_b: m.b,
+            ..base_draw(l1)
+        },
+    ];
+    let pp = gpu.composite_now(&device, &queue, &order);
+    let px = gpu.read_composite_pixel(&device, &queue, pp, 4, 4).unwrap();
+    assert!(
+        px[2] > 0.8 && px[0] < 0.2,
+        "red/blue swap turns red into blue: {px:?}"
     );
 }

@@ -307,6 +307,34 @@ impl CanvasGpu {
         write_lut(queue, &tex.tex, &texels);
     }
 
+    /// Build + upload a Color-Balance layer's per-channel transfer LUT (shadow/
+    /// midtone/highlight RGB shifts → a per-channel curve in the LUT's .rgb),
+    /// stored in the same per-layer LUT slot the compositor samples (kind 13).
+    pub fn set_color_balance_lut(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        shadows: [f32; 3],
+        midtones: [f32; 3],
+        highlights: [f32; 3],
+    ) {
+        let n = LUT_W as usize;
+        let cb = prism_core::adjust::ColorBalanceLuts::build(shadows, midtones, highlights, n);
+        let mut texels = vec![half::f16::from_f32(0.0); n * 4];
+        for (i, px) in texels.chunks_mut(4).enumerate() {
+            px[0] = half::f16::from_f32(cb.r[i]);
+            px[1] = half::f16::from_f32(cb.g[i]);
+            px[2] = half::f16::from_f32(cb.b[i]);
+            px[3] = half::f16::from_f32(1.0);
+        }
+        let t = self
+            .curve_luts
+            .entry(id)
+            .or_insert_with(|| make_lut_target(device, "lut.colorbalance"));
+        write_lut(queue, &t.tex, &texels);
+    }
+
     /// Upload raw RGBA16F (linear premultiplied) bytes into a layer.
     pub fn upload_layer(&mut self, queue: &wgpu::Queue, id: LayerId, bytes: &[u8]) {
         let Some(layer) = self.layers.get(&id) else {

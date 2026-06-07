@@ -30,6 +30,10 @@ pub struct LayerDraw {
     /// 0 = raster layer; else an adjustment kind applied to the backdrop.
     pub adjust_kind: u32,
     pub adjust: [f32; 4],
+    /// Channel-Mixer matrix (adjust_kind 14): per-output [from_r,from_g,from_b,const].
+    pub mix_r: [f32; 4],
+    pub mix_g: [f32; 4],
+    pub mix_b: [f32; 4],
     /// Blend-If: gate the layer by its own + the backdrop's luma.
     pub has_blend_if: bool,
     pub blend_if: [f32; 4], // [this_black, this_white, under_black, under_white]
@@ -196,6 +200,10 @@ struct CompositeParams {
     bevel_light: [f32; 4],        // light direction (xyz unit vector; w unused)
     bevel_highlight: [f32; 4],    // straight rgba (a = opacity)
     bevel_shadow: [f32; 4],       // straight rgba (a = opacity)
+    // Channel-Mixer matrix (adjust_kind 14): per-output [from_r, from_g, from_b, const].
+    mix_r: [f32; 4],
+    mix_g: [f32; 4],
+    mix_b: [f32; 4],
 }
 
 impl CompositeParams {
@@ -243,6 +251,9 @@ impl CompositeParams {
             bevel_light: [0.0; 4],
             bevel_highlight: [0.0; 4],
             bevel_shadow: [0.0; 4],
+            mix_r: [1.0, 0.0, 0.0, 0.0],
+            mix_g: [0.0, 1.0, 0.0, 0.0],
+            mix_b: [0.0, 0.0, 1.0, 0.0],
         }
     }
 }

@@ -278,7 +278,7 @@ sampled-merged source), undoable via region-COW, selection-clipped.
 - [~] **Blend-If / advanced blending** (M): **done** — this-layer + underlying-layer gray-range gating with soft-feathered ranges, evaluated in the composite shader (the backdrop is already bound); per-layer sliders + GPU pixel test. *Still:* per-channel split sliders, fill-vs-opacity, knockout, blend-interior effects.
 - [~] **Channels panel** (M): **done** — alpha channels (save the current selection as a named channel; load a channel back into the selection; delete), GPU round-trip-tested. *Still:* view/edit per-channel RGB, spot channels, split/merge channels.
 - [ ] **Layer comps** (S): named snapshots of visibility/position/appearance
-- [~] **Adjustment expansion** (M): **done** — Curves (Ph4), **Vibrance**, **Photo Filter**, **Posterize**, **Gradient Map** (luma→2-color gradient via the curve-LUT texture, kind 12) — all non-destructive adjustment layers, composite-shader kinds 9/10/11/12, GPU-tested. *Still:* Color Balance, Channel Mixer, Selective Color, multi-stop Gradient Map, Color Lookup (`.cube`/`.3dl` LUT), Shadows/Highlights, HDR Toning, Equalize, Replace/Match Color.
+- [~] **Adjustment expansion** (M): **done** — Curves (Ph4), **Vibrance**, **Photo Filter**, **Posterize**, **Gradient Map** (luma→2-color gradient via the curve-LUT texture, kind 12), **Color Balance** (per-range shadow/midtone/highlight RGB push via a per-channel transfer LUT + preserve-luminosity, kind 13) and **Channel Mixer** (per-output linear RGB mix + constant + monochrome, via a 3-row matrix in the compositor params, kind 14) — all non-destructive adjustment layers, composite-shader kinds 9/10/11/12/13/14, GPU-tested; Color-Balance/Channel-Mixer math also CPU-unit-tested in `prism-core::adjust`. *Still:* Selective Color, multi-stop Gradient Map, Color Lookup (`.cube`/`.3dl` LUT), Shadows/Highlights, HDR Toning, Equalize, Replace/Match Color; and persisting adjustment params to the `.pigment` doc (the adjustment model isn't serialized there yet).
 - [ ] Tests: layer-style pass pixel asserts; smart-object re-render on source edit; blend-if math; alpha-channel round-trip
 
 ### Phase 8 — Filters & distort galleries  *(creative + corrective filters)*
@@ -364,7 +364,7 @@ intentionally a sibling-app concern. Target ≥85% of the *weighted, real-world-
 | Brush richness | tip shapes, dual/scatter/texture, mixer, history brush, symmetry | **Planned** | 6,11 |
 | Selection (marquee/lasso/wand) + edit ops | + magnetic/quick/object/color-range/select-mask | **Done** core; rest **Planned** | 2,10 |
 | Transform | move/scale/translate baked | **Done**; rotate/skew/distort/perspective/warp/puppet **Planned** | 2,7,8 |
-| Adjustments | 7 core done; +15 more | **Done** core; rest **Planned** | 3,7 |
+| Adjustments | 7 core + Curves/Vibrance/Photo Filter/Posterize/Gradient Map/Color Balance/Channel Mixer; rest planned | **Done** core; rest **Planned** | 3,7 |
 | Masks | layer masks done; clipping/vector/group + blend-if | **Done** core; rest **Planned** | 3,4,7 |
 | Filters | blur/sharpen/pixelate done; full galleries | **Done** core; rest **Planned** | 3,8 |
 | Retouch / heal / clone / content-aware / liquify | none yet | **Planned** | 6 |

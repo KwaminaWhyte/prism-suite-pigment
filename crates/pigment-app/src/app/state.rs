@@ -28,7 +28,23 @@ impl PigmentApp {
                 _ => None,
             })
             .collect();
-        if curves.is_empty() && gradmaps.is_empty() {
+        #[allow(clippy::type_complexity)]
+        let balances: Vec<(LayerId, [f32; 3], [f32; 3], [f32; 3])> = self
+            .doc
+            .layers
+            .layers
+            .iter()
+            .filter_map(|l| match &l.kind {
+                LayerKind::Adjustment(Adjustment::ColorBalance {
+                    shadows,
+                    midtones,
+                    highlights,
+                    ..
+                }) => Some((l.id, *shadows, *midtones, *highlights)),
+                _ => None,
+            })
+            .collect();
+        if curves.is_empty() && gradmaps.is_empty() && balances.is_empty() {
             return;
         }
         with_gpu(frame, |gpu, device, queue| {
@@ -37,6 +53,9 @@ impl PigmentApp {
             }
             for (id, low, high) in &gradmaps {
                 gpu.set_gradient_lut(device, queue, *id, *low, *high);
+            }
+            for (id, sh, mid, hi) in &balances {
+                gpu.set_color_balance_lut(device, queue, *id, *sh, *mid, *hi);
             }
         });
     }
@@ -187,6 +206,30 @@ impl PigmentApp {
                         v.to_bits().hash(&mut h);
                     }
                 }
+                if let Adjustment::ColorBalance {
+                    shadows,
+                    midtones,
+                    highlights,
+                    preserve_luminosity,
+                } = a
+                {
+                    for v in shadows.iter().chain(midtones.iter()).chain(highlights.iter()) {
+                        v.to_bits().hash(&mut h);
+                    }
+                    preserve_luminosity.hash(&mut h);
+                }
+                if let Adjustment::ChannelMixer {
+                    r,
+                    g,
+                    b,
+                    monochrome,
+                } = a
+                {
+                    for v in r.iter().chain(g.iter()).chain(b.iter()) {
+                        v.to_bits().hash(&mut h);
+                    }
+                    monochrome.hash(&mut h);
+                }
             }
             if let Some(bi) = self.blend_if.get(&l.id) {
                 for v in bi {
@@ -253,6 +296,14 @@ impl PigmentApp {
                     LayerKind::Adjustment(a) => a.encode(),
                     _ => (0, [0.0; 4]),
                 };
+                // Channel-Mixer matrix (identity unless this is a mixer layer).
+                let mixer = match &l.kind {
+                    LayerKind::Adjustment(a) => a.channel_mixer_matrix(),
+                    _ => None,
+                };
+                let (mix_r, mix_g, mix_b) = mixer
+                    .map(|m| (m.r, m.g, m.b))
+                    .unwrap_or(([1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]));
                 let blend_if = self.blend_if.get(&l.id).copied();
                 let stroke = self.layer_strokes.get(&l.id);
                 let shadow = self.layer_shadows.get(&l.id);
@@ -270,6 +321,9 @@ impl PigmentApp {
                     visible: l.visible,
                     adjust_kind,
                     adjust,
+                    mix_r,
+                    mix_g,
+                    mix_b,
                     has_blend_if: blend_if.is_some(),
                     blend_if: blend_if.unwrap_or([0.0, 1.0, 0.0, 1.0]),
                     clipped: self.clipped_layers.contains(&l.id),

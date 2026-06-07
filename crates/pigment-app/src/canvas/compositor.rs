@@ -162,6 +162,11 @@ impl CanvasGpu {
             let mut p = CompositeParams::plain(l.opacity, l.blend);
             p.adjust_kind = l.adjust_kind;
             p.adjust = l.adjust;
+            if l.adjust_kind == 14 {
+                p.mix_r = l.mix_r;
+                p.mix_g = l.mix_g;
+                p.mix_b = l.mix_b;
+            }
             if l.has_blend_if {
                 p.has_blend_if = 1;
                 p.blend_if = l.blend_if;

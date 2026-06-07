@@ -7,6 +7,31 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Adjustments: Color Balance + Channel Mixer** (Phase 7). Two more
+  non-destructive adjustment layers, wired end-to-end through the established
+  pattern (model variant in `prism-core::adjust` → composite-shader kind →
+  inspector UI → GPU/unit tests). **Color Balance** (shader kind 13) applies a
+  per-tonal-range RGB push — independent `cyan↔red / magenta↔green / yellow↔blue`
+  sliders for Shadows / Midtones / Highlights, plus a *preserve luminosity*
+  toggle. Because each output channel depends only on that same input channel, it
+  rasterizes to a per-channel transfer LUT (reusing the Curves/Gradient-Map LUT
+  texture + `curve_luts` slot), built CPU-side by `ColorBalanceLuts::build`
+  (shadows weight darks, highlights weight lights, midtones a bell at 0.5).
+  **Channel Mixer** (shader kind 14) computes each output channel as a linear mix
+  of all input channels plus a constant (`[from_r, from_g, from_b, const]` per
+  output), with a *monochrome* mode that collapses to a single weighted gray —
+  output mixes all inputs, so it can't use a 1-D LUT and instead rides a small
+  3-row matrix added to the compositor params (`CompositeParams` grew from 352 to
+  400 bytes, still within the 512-byte `PARAMS_STRIDE` slot). New kinds appear
+  automatically in the Add-Adjustment menu (it iterates `Adjustment::defaults()`).
+  Tests: 7 new `prism-core` unit tests (LUT identity/shadow/highlight weighting,
+  mixer swap/monochrome/clamp, encode kind+name stability) and 2 new
+  headless-GPU pixel tests (shadow red-push lifts red; red↔blue mixer swap turns
+  red into blue). *Still open:* Selective Color, multi-stop Gradient Map, Color
+  Lookup (`.cube`/`.3dl` LUT), Shadows/Highlights, HDR Toning, Equalize,
+  Replace/Match Color; Color-Balance/Channel-Mixer params don't yet persist to
+  the `.pigment` doc (the adjustment model isn't serialized there yet — same gap
+  as the other adjustment kinds).
 - **Layer styles persist to `.pigment`** (Phase 7). Closes a known data-loss
   gap: the 8 non-destructive layer styles (Stroke, Drop Shadow, Color Overlay,
   Inner Shadow, Outer Glow, Inner Glow, Gradient Overlay, Bevel & Emboss) were

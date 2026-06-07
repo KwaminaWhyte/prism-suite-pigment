@@ -45,6 +45,10 @@ struct Params {
     bevel_light: vec4<f32>,      // light direction (xyz), w unused
     bevel_highlight: vec4<f32>,  // straight rgba (a = opacity)
     bevel_shadow: vec4<f32>,     // straight rgba (a = opacity)
+    // Channel Mixer (adjust_kind 14): per-output rows [from_r, from_g, from_b, constant].
+    mix_r: vec4<f32>,
+    mix_g: vec4<f32>,
+    mix_b: vec4<f32>,
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -192,6 +196,16 @@ fn apply_curves(c: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(cr, cg, cb);
 }
 
+// Color Balance: each output channel is its own input value pushed through the
+// per-channel transfer LUT (.r/.g/.b), built CPU-side from the shadow/mid/
+// highlight shifts. Unlike Curves there is no master pass.
+fn apply_color_balance(c: vec3<f32>) -> vec3<f32> {
+    let r = textureSampleLevel(lut_tex, samp, vec2<f32>(c.r, 0.5), 0.0).r;
+    let g = textureSampleLevel(lut_tex, samp, vec2<f32>(c.g, 0.5), 0.0).g;
+    let b = textureSampleLevel(lut_tex, samp, vec2<f32>(c.b, 0.5), 0.0).b;
+    return vec3<f32>(r, g, b);
+}
+
 fn apply_adjust(kind: u32, p: vec4<f32>, c_lin: vec3<f32>) -> vec3<f32> {
     if kind == 5u {
         return c_lin * exp2(p.x); // exposure: linear-light multiply
@@ -237,6 +251,23 @@ fn apply_adjust(kind: u32, p: vec4<f32>, c_lin: vec3<f32>) -> vec3<f32> {
         case 12u: { // Gradient Map: luma -> gradient LUT color
             let y = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
             c = textureSampleLevel(lut_tex, samp, vec2<f32>(y, 0.5), 0.0).rgb;
+        }
+        case 13u: { // Color Balance: per-channel transfer LUT (+ optional luma keep)
+            let lum0 = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let bal = apply_color_balance(c);
+            if p.x > 0.5 { // preserve luminosity
+                let lum1 = dot(bal, vec3<f32>(0.2126, 0.7152, 0.0722));
+                c = clamp(bal + (lum0 - lum1), vec3<f32>(0.0), vec3<f32>(1.0));
+            } else {
+                c = bal;
+            }
+        }
+        case 14u: { // Channel Mixer: per-output linear mix of RGB + constant
+            let rr = dot(c, params.mix_r.xyz) + params.mix_r.w;
+            let gg = dot(c, params.mix_g.xyz) + params.mix_g.w;
+            let bb = dot(c, params.mix_b.xyz) + params.mix_b.w;
+            if p.x > 0.5 { c = vec3<f32>(rr); } // monochrome: gray from the R row
+            else { c = vec3<f32>(rr, gg, bb); }
         }
         default: {}
     }

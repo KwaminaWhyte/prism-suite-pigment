@@ -326,7 +326,7 @@ mod tests {
         assert_eq!(covered, 16, "square should cover a 4x4 block");
         // Spot-check: (5,5) inside, (1,1) and (8,8) outside.
         assert_eq!(mask[(5 * w + 5) as usize], 1.0);
-        assert_eq!(mask[(1 * w + 1) as usize], 0.0);
+        assert_eq!(mask[(w + 1) as usize], 0.0);
         assert_eq!(mask[(8 * w + 8) as usize], 0.0);
     }
 
