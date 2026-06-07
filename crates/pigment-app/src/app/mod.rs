@@ -306,6 +306,13 @@ pub struct PigmentApp {
     glow_width: f32,        // Sobel sampling step (px)
     diffuse_amount: f32,    // max neighbour displacement (px)
     diffuse_seed: f32,      // deterministic scramble seed
+    // Noise family (Phase 8).
+    noise_amount: f32,      // add-noise strength (0..1)
+    noise_mono: bool,       // monochromatic (same noise on R/G/B)
+    noise_gaussian: bool,   // gaussian (true) vs uniform (false)
+    noise_seed: f32,        // deterministic noise seed
+    median_radius: f32,     // median / dust window radius (px)
+    dust_threshold: f32,    // dust & scratches threshold (0..1)
 
     hist: Option<Histogram>,
 
@@ -446,6 +453,12 @@ impl PigmentApp {
             glow_width: 1.0,
             diffuse_amount: 4.0,
             diffuse_seed: 1.0,
+            noise_amount: 0.1,
+            noise_mono: false,
+            noise_gaussian: true,
+            noise_seed: 1.0,
+            median_radius: 1.0,
+            dust_threshold: 0.1,
             hist: None,
             gen_fp: HashMap::new(),
             shape_drag: None,

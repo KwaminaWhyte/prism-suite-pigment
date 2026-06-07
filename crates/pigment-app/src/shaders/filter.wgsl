@@ -6,7 +6,7 @@ struct FParams {
     // 5 box blur (separable), 6 radial spin, 7 radial zoom,
     // 8 twirl, 9 pinch/spherize, 10 ripple/wave, 11 polar (rect->polar),
     // 12 polar (polar->rect), 13 find edges, 14 emboss, 15 glowing edges,
-    // 16 diffuse.
+    // 16 diffuse, 17 add noise, 18 median, 19 dust & scratches.
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -15,14 +15,16 @@ struct FParams {
     dir: vec2<f32>,   // blur direction * texel (Gaussian/box/motion); distort:
                       // (amplitude_px, wavelength_px) for ripple; emboss:
                       // (cos angle, sin angle) light direction; diffuse:
-                      // (seed, _)
+                      // (seed, _); add noise: (seed, monochromatic flag)
     amount: f32,      // sharpen amount; radial: spin angle (rad) / zoom fraction;
                       // twirl: max angle (rad); pinch: signed amount (-1..1);
                       // emboss: height/relief gain; glowing edges: brightness;
-                      // diffuse: max neighbour displacement in pixels
+                      // diffuse: max neighbour displacement in pixels; add noise:
+                      // noise amount (0..1); dust & scratches: threshold
     radius: f32,      // blur radius / pixelate block / motion taps / radial
                       // samples; distort: effect radius in pixels; stylize:
-                      // edge sampling width in pixels
+                      // edge sampling width in pixels; add noise: gaussian flag
+                      // (1 gaussian, 0 uniform); median/dust: window radius (px)
     center: vec2<f32>, // radial/distort center in uv (0..1)
 };
 
@@ -45,6 +47,26 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     out.pos = vec4<f32>(c, 0.0, 1.0);
     out.uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
     return out;
+}
+
+// Canonical `fract(sin(..))` hash → a stable pseudo-random scalar in [0,1) for
+// integer pixel `(ix, iy)` and `seed`. Matches the diffuse hash so the CPU
+// reference can reproduce it bit-for-bit.
+fn hash21(ix: f32, iy: f32, seed: f32) -> f32 {
+    return fract(sin(dot(vec2<f32>(ix, iy), vec2<f32>(12.9898, 78.233)) + seed) * 43758.5453);
+}
+
+// One zero-mean uniform noise sample in (-1, 1): the difference of two i.i.d.
+// hashes, symmetric about 0 so the per-channel mean is preserved.
+fn uniform1(ix: f32, iy: f32, seed: f32) -> f32 {
+    return hash21(ix, iy, seed) - hash21(ix, iy, seed + 200.0);
+}
+
+// One ~unit-variance gaussian sample via Box–Muller from two hashes.
+fn gauss1(ix: f32, iy: f32, seed: f32) -> f32 {
+    let u1 = max(hash21(ix, iy, seed), 1e-6);
+    let u2 = hash21(ix, iy, seed + 101.0);
+    return sqrt(-2.0 * log(u1)) * cos(6.28318530718 * u2);
 }
 
 @fragment
@@ -194,6 +216,99 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             spx = vec2<f32>((theta / 6.28318530718) * dim.x, (rr / maxr) * dim.y);
         }
         return textureSample(input, samp, spx * p.texel);
+    } else if p.kind == 17u {
+        // ---- Add Noise (kind 17): seeded-deterministic per-pixel noise added
+        // to the (unpremultiplied) colour, then re-premultiplied. dir.x = seed,
+        // dir.y = monochromatic flag (1 = same noise on R/G/B), amount = noise
+        // strength (0..1), radius = gaussian flag (1 gaussian, 0 uniform). The
+        // noise is zero-mean so the average is preserved, and stable per seed
+        // (matches the diffuse hash philosophy — no temporal randomness).
+        let dim = 1.0 / p.texel;
+        let px = in.uv * dim;
+        let ix = floor(px.x);
+        let iy = floor(px.y);
+        let seed = p.dir.x;
+        let mono = p.dir.y > 0.5;
+        let gaussian = p.radius > 0.5;
+        let src = textureSample(input, samp, in.uv);
+        let a = max(src.a, 1e-4);
+        var col = src.rgb / a;                     // unpremultiplied colour
+        var nrgb = vec3<f32>(0.0);
+        if gaussian {
+            // Box–Muller → ~unit-variance gaussian (zero-mean), scaled.
+            if mono {
+                nrgb = vec3<f32>(gauss1(ix, iy, seed) * 0.4);
+            } else {
+                nrgb = vec3<f32>(
+                    gauss1(ix, iy, seed) * 0.4,
+                    gauss1(ix, iy, seed + 17.0) * 0.4,
+                    gauss1(ix, iy, seed + 53.0) * 0.4,
+                );
+            }
+        } else {
+            // Uniform: a symmetric difference of two i.i.d. hashes → zero-mean
+            // in [-1, 1] (the raw `fract(sin)` hash is biased on a regular grid,
+            // so subtracting a second sample centres it and preserves the mean).
+            if mono {
+                nrgb = vec3<f32>(uniform1(ix, iy, seed));
+            } else {
+                nrgb = vec3<f32>(
+                    uniform1(ix, iy, seed),
+                    uniform1(ix, iy, seed + 17.0),
+                    uniform1(ix, iy, seed + 53.0),
+                );
+            }
+        }
+        col = clamp(col + nrgb * p.amount, vec3<f32>(0.0), vec3<f32>(1.0));
+        return vec4<f32>(col * src.a, src.a);
+    } else if p.kind == 18u || p.kind == 19u {
+        // ---- Median (kind 18) / Dust & Scratches (kind 19). Per-channel median
+        // over a (2r+1)² window (despeckle / salt-pepper removal). Dust &
+        // Scratches only replaces a pixel when it differs from the median by
+        // more than `amount` (threshold), preserving fine detail. Work on the
+        // unpremultiplied colour so a transparent edge doesn't bias the median.
+        let r = i32(clamp(p.radius, 0.0, 4.0));
+        let src = textureSample(input, samp, in.uv);
+        let sa = max(src.a, 1e-4);
+        let scol = src.rgb / sa;
+        var out = scol;
+        for (var ch = 0; ch < 3; ch = ch + 1) {
+            var vals: array<f32, 81>;
+            var n = 0;
+            for (var dy = -r; dy <= r; dy = dy + 1) {
+                for (var dx = -r; dx <= r; dx = dx + 1) {
+                    let s = textureSample(
+                        input, samp,
+                        in.uv + vec2<f32>(f32(dx), f32(dy)) * p.texel,
+                    );
+                    let v = s.rgb / max(s.a, 1e-4);
+                    vals[n] = v[ch];
+                    n = n + 1;
+                }
+            }
+            // Insertion sort the n collected values, then take the middle.
+            for (var i = 1; i < n; i = i + 1) {
+                let key = vals[i];
+                var j = i - 1;
+                loop {
+                    if j < 0 || vals[j] <= key { break; }
+                    vals[j + 1] = vals[j];
+                    j = j - 1;
+                }
+                vals[j + 1] = key;
+            }
+            let med = vals[n / 2];
+            if p.kind == 19u {
+                // Dust & Scratches: keep the original unless it strays past the
+                // threshold from the median.
+                if abs(scol[ch] - med) > p.amount {
+                    out[ch] = med;
+                }
+            } else {
+                out[ch] = med;
+            }
+        }
+        return vec4<f32>(out * src.a, src.a);
     } else if p.kind == 16u {
         // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
         // swap. Replace each pixel with one of its neighbours within `amount`

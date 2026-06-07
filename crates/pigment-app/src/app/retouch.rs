@@ -656,6 +656,51 @@ impl PigmentApp {
         });
         self.force_composite = true;
     }
+
+    /// Add seeded-deterministic noise to the active layer: zero-mean per-pixel
+    /// noise (gaussian or uniform) of `amount` strength, optionally
+    /// monochromatic; stable for a given `seed` (no temporal randomness).
+    pub(crate) fn do_add_noise(
+        &mut self,
+        frame: &mut eframe::Frame,
+        amount: f32,
+        mono: bool,
+        gaussian: bool,
+        seed: f32,
+    ) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_noise(d, q, active, amount, mono, gaussian, seed)
+        });
+        self.force_composite = true;
+    }
+
+    /// Median despeckle on the active layer: per-channel median over a
+    /// `(2·radius+1)²` window (salt-pepper / impulse removal).
+    pub(crate) fn do_median(&mut self, frame: &mut eframe::Frame, radius: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_median(d, q, active, radius, None)
+        });
+        self.force_composite = true;
+    }
+
+    /// Dust & Scratches on the active layer: a thresholded median — only pixels
+    /// that differ from the window median by more than `threshold` are replaced,
+    /// preserving fine detail while removing specks. `radius` is the window
+    /// radius (px).
+    pub(crate) fn do_dust_and_scratches(
+        &mut self,
+        frame: &mut eframe::Frame,
+        radius: f32,
+        threshold: f32,
+    ) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_median(d, q, active, radius, Some(threshold))
+        });
+        self.force_composite = true;
+    }
 }
 
 #[cfg(test)]

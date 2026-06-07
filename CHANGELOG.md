@@ -7,6 +7,40 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Noise filters — Add Noise, Median, Dust & Scratches** (Phase 8). Three new
+  destructive filters wired through the exact existing filter pattern (GPU
+  shader pass keyed by `kind` in `filter.wgsl` → `apply_*` on the compositor →
+  `do_*` in the app → Filter ▸ Noise menu → tests), all undoable (region-COW)
+  like the existing blur / distort / stylize filters, all in
+  linear-premultiplied working space (noise added to the unpremultiplied colour,
+  then re-premultiplied, so a transparent edge doesn't bias the result).
+  **Add Noise** (kind 17) — seeded-deterministic per-pixel noise, **gaussian**
+  (Box–Muller) or **uniform** (a symmetric difference of two i.i.d. hashes so
+  it's zero-mean: the raw `fract(sin)` hash is biased on a regular grid), with an
+  `amount`, a **monochromatic** toggle (same noise on R/G/B), and a `seed`. It
+  follows the `diffuse` hash philosophy exactly — stable for a given seed, no
+  temporal randomness — and is **zero-mean so the channel average is preserved**.
+  **Median** (kind 18) — per-channel median over a `(2·radius+1)²` window
+  (despeckle / salt-pepper / impulse removal); radius param. **Dust &
+  Scratches** (kind 19) — a thresholded median: a channel is replaced by the
+  window median only when the original differs from it by more than the
+  `threshold`, so specks are removed while sub-threshold detail is preserved.
+  A new **Filter ▸ Noise** submenu hosts the three with their parameter
+  controls (add-noise amount + gaussian/uniform + monochromatic + seed; median
+  radius; dust threshold). Tests: the test-only `canvas::filter_math` CPU
+  reference module gains the three filters (`add_noise`, `median`,
+  `dust_and_scratches`) with **8 new deterministic unit tests** — add-noise
+  amount-0 identity / determinism (same seed ≡, different seed ≠) / monochromatic
+  equal-RGB-delta / mean-preserved (gaussian + uniform) + perturbation, median
+  removes an impulse / radius grows the window, dust & scratches changes only
+  above-threshold pixels / high-threshold identity — plus **3 new headless-GPU
+  pixel tests** (`add_noise_is_deterministic_and_zero_mean` covering
+  determinism + zero-mean + monochromatic R=G=B, `median_removes_an_impulse`,
+  `dust_scratches_only_changes_above_threshold`) mirroring the existing GPU
+  filter-test pattern. App test count 87 → 98. No shared-crate changes
+  (raster-only, pigment-app per PLAN §0a). *Still open (Phase 8 noise backlog):*
+  Reduce Noise, Despeckle, selection-clipped noise, non-destructive smart-filter
+  form.
 - **Distort filters — Twirl, Pinch/Spherize, Ripple/Wave, Polar Coordinates**
   (Phase 8). Four new destructive coordinate-displacement filters, wired through
   the exact existing filter pattern (GPU shader pass keyed by `kind` in

@@ -320,6 +320,47 @@ impl eframe::App for PigmentApp {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button("Noise", |ui| {
+                        // Add Noise (seeded-deterministic; gaussian/uniform,
+                        // amount, monochromatic toggle).
+                        ui.add(egui::Slider::new(&mut self.noise_amount, 0.0..=1.0).text("amount"));
+                        ui.checkbox(&mut self.noise_gaussian, "gaussian (else uniform)");
+                        ui.checkbox(&mut self.noise_mono, "monochromatic");
+                        ui.add(egui::Slider::new(&mut self.noise_seed, 0.0..=100.0).text("seed"));
+                        if ui.button("Add Noise").clicked() {
+                            self.do_add_noise(
+                                frame,
+                                self.noise_amount,
+                                self.noise_mono,
+                                self.noise_gaussian,
+                                self.noise_seed,
+                            );
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Median (per-channel median over a (2r+1)² window).
+                        ui.add(
+                            egui::Slider::new(&mut self.median_radius, 1.0..=4.0).text("radius"),
+                        );
+                        if ui.button("Median").clicked() {
+                            self.do_median(frame, self.median_radius);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Dust & Scratches (thresholded median).
+                        ui.add(
+                            egui::Slider::new(&mut self.dust_threshold, 0.0..=1.0)
+                                .text("threshold"),
+                        );
+                        if ui.button("Dust & Scratches").clicked() {
+                            self.do_dust_and_scratches(
+                                frame,
+                                self.median_radius,
+                                self.dust_threshold,
+                            );
+                            ui.close_menu();
+                        }
+                    });
                 });
                 ui.menu_button("Select", |ui| {
                     if ui.button("All").clicked() {

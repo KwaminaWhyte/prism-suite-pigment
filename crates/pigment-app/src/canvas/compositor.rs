@@ -287,6 +287,79 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Add seeded-deterministic noise to the active layer (kind 17). `amount` is
+    /// the noise strength (0..1); `mono` applies the same noise to R/G/B;
+    /// `gaussian` selects gaussian (true) vs uniform (false) noise; `seed` makes
+    /// it reproducible. Single pass; destructive + undoable (region-COW).
+    pub fn apply_noise(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        amount: f32,
+        mono: bool,
+        gaussian: bool,
+        seed: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Add Noise");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        let dir = [seed, if mono { 1.0 } else { 0.0 }];
+        let gflag = if gaussian { 1.0 } else { 0.0 };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            17,
+            dir,
+            amount,
+            gflag,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
+    /// Per-channel median despeckle on the active layer: Median (kind 18, full
+    /// replacement) or Dust & Scratches (kind 19, replace only when the pixel
+    /// differs from the window median by more than `threshold`). `radius` is the
+    /// window radius in px (window = `2·radius+1`). Single pass; destructive +
+    /// undoable (region-COW).
+    pub fn apply_median(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        radius: f32,
+        threshold: Option<f32>,
+    ) {
+        self.begin_command_now(device, queue, id, "Median");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        let (kind, amount) = match threshold {
+            Some(t) => (19, t),
+            None => (18, 0.0),
+        };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            kind,
+            [0.0; 2],
+            amount,
+            radius,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.
     pub fn composite_now(
         &mut self,
