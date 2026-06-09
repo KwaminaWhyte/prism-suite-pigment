@@ -323,6 +323,11 @@ pub struct PigmentApp {
     halftone_angle: f32,    // color-halftone screen angle (deg)
     mezzotint_amount: f32,  // mezzotint threshold bias (0..1)
     mezzotint_seed: f32,    // mezzotint dither seed
+    // Render family (Phase 8).
+    clouds_seed: f32,       // clouds / difference-clouds fBm seed
+    clouds_scale: f32,      // base feature size (px)
+    clouds_roughness: f32,  // per-octave amplitude falloff (0..1)
+    clouds_octaves: u32,    // fBm octave count
 
     hist: Option<Histogram>,
 
@@ -477,6 +482,10 @@ impl PigmentApp {
             halftone_angle: 45.0,
             mezzotint_amount: 0.5,
             mezzotint_seed: 1.0,
+            clouds_seed: 1.0,
+            clouds_scale: 32.0,
+            clouds_roughness: 0.5,
+            clouds_octaves: 5,
             hist: None,
             gen_fp: HashMap::new(),
             shape_drag: None,

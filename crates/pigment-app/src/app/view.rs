@@ -433,6 +433,45 @@ impl eframe::App for PigmentApp {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button("Render", |ui| {
+                        // Clouds / Difference Clouds (deterministic fBm value-noise
+                        // generator): seed, base feature scale, per-octave
+                        // roughness, octave count. Clouds fills the layer; Diff.
+                        // Clouds differences the field against the existing pixels.
+                        ui.add(egui::Slider::new(&mut self.clouds_seed, 0.0..=100.0).text("seed"));
+                        ui.add(
+                            egui::Slider::new(&mut self.clouds_scale, 2.0..=256.0).text("scale"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.clouds_roughness, 0.05..=0.95)
+                                .text("roughness"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.clouds_octaves, 1..=10).text("octaves"),
+                        );
+                        if ui.button("Clouds").clicked() {
+                            self.do_clouds(
+                                frame,
+                                false,
+                                self.clouds_seed,
+                                self.clouds_scale,
+                                self.clouds_roughness,
+                                self.clouds_octaves,
+                            );
+                            ui.close_menu();
+                        }
+                        if ui.button("Difference Clouds").clicked() {
+                            self.do_clouds(
+                                frame,
+                                true,
+                                self.clouds_seed,
+                                self.clouds_scale,
+                                self.clouds_roughness,
+                                self.clouds_octaves,
+                            );
+                            ui.close_menu();
+                        }
+                    });
                 });
                 ui.menu_button("Select", |ui| {
                     if ui.button("All").clicked() {

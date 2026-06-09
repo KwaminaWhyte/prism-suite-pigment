@@ -566,6 +566,52 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Render Clouds (kind 25) / Difference Clouds (kind 26) into the active
+    /// layer — a generator that fills it with a deterministic multi-octave
+    /// value-noise (fBm) field. `seed` makes it reproducible; `scale` is the base
+    /// feature size (px), `roughness` the per-octave amplitude falloff, `octaves`
+    /// the layer count. Clouds ignores the source; Difference Clouds composites
+    /// the field against the existing pixels via per-channel absolute difference
+    /// (so repeated application builds veins). Single pass; destructive + undoable
+    /// (region-COW).
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_clouds(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        difference: bool,
+        seed: f32,
+        scale: f32,
+        roughness: f32,
+        octaves: u32,
+    ) {
+        let label = if difference {
+            "Difference Clouds"
+        } else {
+            "Clouds"
+        };
+        self.begin_command_now(device, queue, id, label);
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        let kind = if difference { 26 } else { 25 };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            kind,
+            [seed, roughness],
+            scale,
+            octaves.max(1) as f32,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.
     pub fn composite_now(
         &mut self,

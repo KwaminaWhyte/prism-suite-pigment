@@ -2564,3 +2564,72 @@ fn high_pass_flattens_flats_and_keeps_edges() {
         "light side of edge rises above mid-gray: {light_side:?}"
     );
 }
+
+// ---- Render family (Phase 8) ----------------------------------------------
+
+// Clouds fills the layer with a deterministic fBm field: opaque, gray, in range,
+// reproducible per seed, and actually varying (not a flat fill). Difference
+// Clouds = |source − cloud|, so on a black field it reproduces the raw cloud.
+#[test]
+fn clouds_are_deterministic_opaque_and_vary() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping clouds_are_deterministic_opaque_and_vary");
+        return;
+    };
+    let n = 32u32;
+    let run = |difference: bool, base: f32, seed: f32| -> Vec<[f32; 4]> {
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        gpu.ensure_canvas(&device, Size::new(n, n));
+        let l0 = LayerId(0);
+        gpu.ensure_layer(&device, l0);
+        gpu.upload_layer(&queue, l0, &layer_from(n, |_x, _y| [base, base, base, 1.0]));
+        gpu.apply_clouds(&device, &queue, l0, difference, seed, 16.0, 0.5, 5);
+        let mut px = Vec::with_capacity((n * n) as usize);
+        for y in 0..n {
+            for x in 0..n {
+                px.push(gpu.read_pixel(&device, &queue, l0, x, y).unwrap());
+            }
+        }
+        px
+    };
+
+    // Clouds: deterministic for a fixed seed.
+    let a = run(false, 0.5, 7.0);
+    let b = run(false, 0.5, 7.0);
+    for (pa, pb) in a.iter().zip(b.iter()) {
+        for c in 0..4 {
+            assert!((pa[c] - pb[c]).abs() < 1e-3, "deterministic for a fixed seed");
+        }
+    }
+    // Opaque, gray, in range, and varying.
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for p in &a {
+        assert!((p[3] - 1.0).abs() < 0.02, "opaque: {p:?}");
+        assert!((p[0] - p[1]).abs() < 2e-3 && (p[1] - p[2]).abs() < 2e-3, "gray: {p:?}");
+        for c in 0..3 {
+            assert!((-0.01..=1.01).contains(&p[c]), "in range: {p:?}");
+        }
+        min = min.min(p[0]);
+        max = max.max(p[0]);
+    }
+    assert!(max - min > 0.05, "field varies (not flat): {min}..{max}");
+
+    // Different seed → a different field.
+    let c = run(false, 0.5, 9.0);
+    assert!(
+        a.iter().zip(c.iter()).any(|(p, q)| (p[0] - q[0]).abs() > 0.02),
+        "different seeds → different clouds"
+    );
+
+    // Difference Clouds on a black field reproduces the raw cloud (|0 − n| = n).
+    let from_black = run(true, 0.0, 7.0);
+    for (d, p) in from_black.iter().zip(a.iter()) {
+        assert!(
+            (d[0] - p[0]).abs() < 5e-3,
+            "diff clouds on black = clouds: {} vs {}",
+            d[0],
+            p[0]
+        );
+    }
+}

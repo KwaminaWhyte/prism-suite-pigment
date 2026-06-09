@@ -8,7 +8,9 @@ struct FParams {
     // 12 polar (polar->rect), 13 find edges, 14 emboss, 15 glowing edges,
     // 16 diffuse, 17 add noise, 18 median, 19 dust & scratches,
     // 20 mosaic, 21 crystallize, 22 color halftone, 23 mezzotint,
-    // 24 high pass (orig - blur, re-centred at mid-gray).
+    // 24 high pass (orig - blur, re-centred at mid-gray),
+    // 25 clouds (fBm value-noise generator), 26 difference clouds
+    // (|source - clouds|).
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -19,7 +21,8 @@ struct FParams {
                       // (cos angle, sin angle) light direction; diffuse:
                       // (seed, _); add noise: (seed, monochromatic flag);
                       // color halftone: (cos angle, sin angle) screen rotation;
-                      // crystallize/mezzotint: (seed, _)
+                      // crystallize/mezzotint: (seed, _);
+                      // clouds/difference clouds: (seed, roughness)
     amount: f32,      // sharpen amount; radial: spin angle (rad) / zoom fraction;
                       // twirl: max angle (rad); pinch: signed amount (-1..1);
                       // emboss: height/relief gain; glowing edges: brightness;
@@ -79,6 +82,39 @@ fn gauss1(ix: f32, iy: f32, seed: f32) -> f32 {
     let u1 = max(hash21(ix, iy, seed), 1e-6);
     let u2 = hash21(ix, iy, seed + 101.0);
     return sqrt(-2.0 * log(u1)) * cos(6.28318530718 * u2);
+}
+
+// Smooth 2D value noise in [0,1): bilinear interpolation between the four
+// hashed lattice corners around `p`, smoothed with the classic Hermite curve
+// (3t²−2t³). Built on `hash21` so the CPU reference reproduces it bit-for-bit.
+fn value_noise(p: vec2<f32>, seed: f32) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    let a = hash21(i.x, i.y, seed);
+    let b = hash21(i.x + 1.0, i.y, seed);
+    let c = hash21(i.x, i.y + 1.0, seed);
+    let d = hash21(i.x + 1.0, i.y + 1.0, seed);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Fractal (fBm) sum of `octaves` value-noise layers: each octave doubles the
+// frequency and halves the amplitude (`roughness` controls the falloff). The
+// running amplitude sum normalises the result back into [0,1], so the cloud
+// texture is a soft, seamless multi-scale field. `scale` is the base feature
+// size in pixels (larger → broader puffs). Deterministic for a given seed.
+fn fbm(px: vec2<f32>, seed: f32, scale: f32, roughness: f32, octaves: i32) -> f32 {
+    var freq = 1.0 / max(scale, 1.0);
+    var amp = 1.0;
+    var sum = 0.0;
+    var norm = 0.0;
+    for (var o = 0; o < octaves; o = o + 1) {
+        sum = sum + amp * value_noise(px * freq, seed + f32(o) * 37.0);
+        norm = norm + amp;
+        freq = freq * 2.0;
+        amp = amp * roughness;
+    }
+    return sum / max(norm, 1e-5);
 }
 
 @fragment
@@ -495,6 +531,33 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let bcol = blr.rgb / ba;
         let hp = clamp(0.5 + (scol - bcol) * p.amount, vec3<f32>(0.0), vec3<f32>(1.0));
         return vec4<f32>(hp * src.a, src.a);
+    } else if p.kind == 25u || p.kind == 26u {
+        // ---- Clouds (kind 25) / Difference Clouds (kind 26): a generator —
+        // fill the layer with a deterministic multi-octave value-noise (fBm)
+        // field. dir.x = seed, dir.y = roughness, amount = scale (base feature
+        // size px), radius = octave count. The noise is seamless and stable per
+        // seed (matches the diffuse/add-noise hash philosophy). Difference Clouds
+        // composites it against the existing pixels via absolute difference, so
+        // repeated application builds the classic veins. The result is fully
+        // opaque (a generator paints the whole layer). For Clouds the source
+        // pixels are ignored; for Difference Clouds the unpremultiplied source
+        // colour is differenced channel-wise against the (monochrome) cloud.
+        let dim = 1.0 / p.texel;
+        let px = in.uv * dim;
+        let seed = p.dir.x;
+        let roughness = clamp(p.dir.y, 0.05, 0.95);
+        let scale = max(p.amount, 1.0);
+        let octaves = clamp(i32(p.radius), 1, 10);
+        let n = fbm(px, seed, scale, roughness, octaves);
+        if p.kind == 25u {
+            return vec4<f32>(vec3<f32>(n), 1.0);
+        }
+        // Difference Clouds: |source − cloud| per channel (Photoshop-style).
+        let src = textureSample(input, samp, in.uv);
+        let a = max(src.a, 1e-4);
+        let base = src.rgb / a;
+        let diff = abs(base - vec3<f32>(n));
+        return vec4<f32>(diff, 1.0);
     } else if p.kind == 16u {
         // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
         // swap. Replace each pixel with one of its neighbours within `amount`

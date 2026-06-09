@@ -6,6 +6,34 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+### Added
+- **Render filter — Clouds & Difference Clouds** (Phase 8). A new pair of
+  destructive *generator* filters wired through the exact existing filter pattern
+  (GPU shader pass keyed by `kind` in `filter.wgsl` → `apply_clouds` on the
+  compositor → `do_clouds` in the app → a new **Filter ▸ Render** submenu →
+  tests), undoable (region-COW) like the existing blur / distort / stylize /
+  noise / pixelate filters. Both paint the active layer with a deterministic
+  multi-octave value-noise (fBm) field — a soft cloud texture — built on the same
+  `hash21` lattice the noise/diffuse filters use, so it is **reproducible for a
+  given seed** and reproduced bit-for-bit by the test-only `canvas::filter_math`
+  CPU reference. **Clouds** (kind 25) fills the layer with the field (ignoring the
+  source); **Difference Clouds** (kind 26) composites the field against the
+  existing pixels via per-channel absolute difference (Photoshop-style), so
+  repeated application folds the field and builds the characteristic veins. The
+  fBm sums `octaves` value-noise layers (each doubling frequency, scaling
+  amplitude by `roughness`), renormalised into `[0,1]`; controls expose **seed**,
+  **scale** (base feature size px), **roughness** (per-octave falloff) and
+  **octaves** under the new Render submenu. (Also tightened the shared CPU
+  `hash21` to WGSL's floor-based `fract` so negative samples match the shader
+  exactly.) Tests: the CPU reference module gains `value_noise` / `fbm` plus
+  `clouds` / `difference_clouds` and **6 CPU unit tests** (determinism for a
+  fixed seed; different seeds differ; output in range / opaque / gray; the field
+  is spatially smooth, not white noise; difference-clouds = |base − noise|; the
+  fold keeps transforming on repeat) — all pass under a normal `cargo test` — plus
+  **1 GPU pixel test** gated on a GPU adapter (skip-on-no-adapter), so the default
+  headless `cargo test` stays green. The new control fields are runtime UI state
+  on the (non-serialized) app, so `.pigment` files round-trip unchanged.
+
 ## [0.1.0] - 2026-06-09
 
 ### Added

@@ -759,6 +759,29 @@ impl PigmentApp {
         });
         self.force_composite = true;
     }
+
+    /// Render Clouds / Difference Clouds into the active layer (Render family): a
+    /// generator that fills it with a deterministic multi-octave value-noise
+    /// (fBm) field — `seed` makes it reproducible, `scale` is the base feature
+    /// size (px), `roughness` the per-octave falloff, `octaves` the layer count.
+    /// `difference` composites the field against the existing pixels via absolute
+    /// difference (so repeated application builds veins).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn do_clouds(
+        &mut self,
+        frame: &mut eframe::Frame,
+        difference: bool,
+        seed: f32,
+        scale: f32,
+        roughness: f32,
+        octaves: u32,
+    ) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_clouds(d, q, active, difference, seed, scale, roughness, octaves)
+        });
+        self.force_composite = true;
+    }
 }
 
 #[cfg(test)]
