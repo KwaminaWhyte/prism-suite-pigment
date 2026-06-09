@@ -2,9 +2,11 @@
 
 All notable changes to **Pigment** (the Prism suite's raster editor) are documented
 here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-this project is pre-1.0, so versions are `0.0.x` milestones.
+this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-06-09
 
 ### Added
 - **Sharpen filter — High Pass** (Phase 8). A new destructive filter wired
