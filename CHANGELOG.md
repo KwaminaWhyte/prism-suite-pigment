@@ -6,6 +6,8 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-09
+
 ### Added
 - **Render filter — Clouds & Difference Clouds** (Phase 8). A new pair of
   destructive *generator* filters wired through the exact existing filter pattern
