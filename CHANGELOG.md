@@ -7,6 +7,34 @@ this project is pre-1.0, so versions are `0.0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Sharpen filter — High Pass** (Phase 8). A new destructive filter wired
+  through the exact existing filter pattern (GPU shader pass keyed by `kind` in
+  `filter.wgsl` → `apply_high_pass` on the compositor → `do_high_pass` in the app
+  → Filter ▸ Sharpen submenu → tests), undoable (region-COW) like the existing
+  blur / distort / stylize / noise / pixelate filters, all in linear-premultiplied
+  working space (the difference is taken on the unpremultiplied colour, then
+  re-premultiplied, so a transparent edge doesn't bias it). **High Pass** (kind
+  24) — the classic Photoshop sharpen prep: subtract a Gaussian-blurred copy from
+  the original and re-centre at mid-gray, so flat areas go neutral gray (0.5) and
+  only the high-frequency detail/edges survive as a signed deviation about 0.5.
+  It reuses the existing separable Gaussian (kind 1, two passes) for the blur,
+  saving the untouched source in the `ping` buffer, then a two-input combine pass
+  (the filter bind group gains a back-compatible secondary texture at binding 3,
+  aliased to the primary input for every single-input kind) subtracts the blur
+  from the original. A `radius` (blur scale → coarser detail kept) and an
+  `amount` (detail gain; 1 = identity high pass, 0 = flat mid-gray) control it,
+  exposed under a new **Filter ▸ Sharpen** submenu (alongside the existing
+  Sharpen). Tests: the test-only `canvas::filter_math` CPU reference module gains
+  a separable `gaussian_blur` (matching the kind-1 shader weights bit-for-bit)
+  and `high_pass` with **5 new deterministic unit tests** — Gaussian preserves a
+  flat field, High Pass flattens locally-uniform areas to mid-gray while the edge
+  carries detail, the two sides of an edge deviate in opposite directions about
+  mid-gray (signed), amount 0 is a flat mid-gray field, and a larger amount
+  scales the detail — plus **1 new headless-GPU pixel test**
+  (`high_pass_flattens_flats_and_keeps_edges`) mirroring the existing GPU
+  filter-test pattern (skip-on-no-adapter). App test count 109 → 115. No
+  shared-crate changes (raster-only, pigment-app per PLAN §0a). *Still open
+  (Sharpen family backlog):* Smart Sharpen, Unsharp Mask refinement.
 - **Pixelate filters — Mosaic, Crystallize, Color Halftone, Mezzotint**
   (Phase 8). Four new destructive filters wired through the exact existing
   filter pattern (GPU shader pass keyed by `kind` in `filter.wgsl` → `apply_*`

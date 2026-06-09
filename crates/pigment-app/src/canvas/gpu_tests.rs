@@ -2516,3 +2516,51 @@ fn mezzotint_is_binary_and_tracks_brightness() {
     let bright = white(0.75);
     assert!(bright > dark, "brighter → more white: {bright} > {dark}");
 }
+
+// High Pass flattens locally-uniform areas to mid-gray (0.5) and keeps the edge
+// detail as a signed deviation about it (an edge has two opposite-signed sides).
+#[test]
+fn high_pass_flattens_flats_and_keeps_edges() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping high_pass_flattens_flats_and_keeps_edges");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 32u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    // Vertical black/white split at the mid column.
+    let c = n / 2;
+    gpu.upload_layer(
+        &queue,
+        l0,
+        &layer_from(n, |x, _y| {
+            if x >= c {
+                [1.0, 1.0, 1.0, 1.0]
+            } else {
+                [0.0, 0.0, 0.0, 1.0]
+            }
+        }),
+    );
+    gpu.apply_high_pass(&device, &queue, l0, 3.0, 1.0);
+
+    let row = n / 2;
+    // A column far from the edge is locally flat → high pass ≈ mid-gray.
+    let flat = gpu.read_pixel(&device, &queue, l0, 2, row).unwrap();
+    assert!(
+        (flat[0] - 0.5).abs() < 0.05 && (flat[3] - 1.0).abs() < 0.02,
+        "flat area → mid-gray, alpha kept: {flat:?}"
+    );
+    // The two sides of the edge deviate in opposite directions about mid-gray.
+    let dark_side = gpu.read_pixel(&device, &queue, l0, c - 1, row).unwrap();
+    let light_side = gpu.read_pixel(&device, &queue, l0, c, row).unwrap();
+    assert!(
+        dark_side[0] < 0.5,
+        "dark side of edge dips below mid-gray: {dark_side:?}"
+    );
+    assert!(
+        light_side[0] > 0.5,
+        "light side of edge rises above mid-gray: {light_side:?}"
+    );
+}

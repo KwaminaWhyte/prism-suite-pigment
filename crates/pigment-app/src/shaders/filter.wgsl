@@ -7,7 +7,8 @@ struct FParams {
     // 8 twirl, 9 pinch/spherize, 10 ripple/wave, 11 polar (rect->polar),
     // 12 polar (polar->rect), 13 find edges, 14 emboss, 15 glowing edges,
     // 16 diffuse, 17 add noise, 18 median, 19 dust & scratches,
-    // 20 mosaic, 21 crystallize, 22 color halftone, 23 mezzotint.
+    // 20 mosaic, 21 crystallize, 22 color halftone, 23 mezzotint,
+    // 24 high pass (orig - blur, re-centred at mid-gray).
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -37,6 +38,11 @@ struct FParams {
 @group(0) @binding(0) var samp: sampler;
 @group(0) @binding(1) var input: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> p: FParams;
+// Secondary input. For every single-input kind this is bound to the *same*
+// texture as `input` (so it is a harmless alias); only the High Pass combine
+// (kind 24) reads it separately — `input` is the Gaussian-blurred copy and
+// `orig` the untouched source — so it can subtract one from the other.
+@group(0) @binding(3) var orig: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -470,6 +476,25 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // Dither: keep white where luma exceeds the threshold, else black.
         let v = select(0.0, 1.0, luma > t + (p.amount - 0.5));
         return vec4<f32>(vec3<f32>(v) * src.a, src.a);
+    } else if p.kind == 24u {
+        // ---- High Pass (kind 24): the classic Photoshop sharpen prep —
+        // subtract a Gaussian-blurred copy from the original and re-centre at
+        // mid-gray, so flat areas go neutral gray and only the (high-frequency)
+        // detail/edges survive as a signed deviation about 0.5. The combine pass
+        // reads the blurred copy from `input` and the untouched source from
+        // `orig`; the Gaussian blur itself runs as two prior kind-1 passes
+        // CPU-side. Work on the unpremultiplied colour (matching add-noise), then
+        // re-premultiply, so a transparent edge doesn't bias the difference. The
+        // source alpha is preserved. `amount` scales the detail (1 = identity
+        // high pass) for a softer/stronger result.
+        let src = textureSample(orig, samp, in.uv);
+        let blr = textureSample(input, samp, in.uv);
+        let sa = max(src.a, 1e-4);
+        let ba = max(blr.a, 1e-4);
+        let scol = src.rgb / sa;
+        let bcol = blr.rgb / ba;
+        let hp = clamp(0.5 + (scol - bcol) * p.amount, vec3<f32>(0.0), vec3<f32>(1.0));
+        return vec4<f32>(hp * src.a, src.a);
     } else if p.kind == 16u {
         // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
         // swap. Replace each pixel with one of its neighbours within `amount`

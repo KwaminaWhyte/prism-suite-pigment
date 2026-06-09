@@ -510,6 +510,18 @@ impl PigmentApp {
         self.force_composite = true;
     }
 
+    /// High Pass the active layer (Sharpen family): subtract a Gaussian-blurred
+    /// copy from the original and re-centre at mid-gray, so flats go neutral gray
+    /// and only the high-frequency detail/edges survive. `radius` is the blur
+    /// radius (coarser detail kept as it grows); `amount` scales the detail.
+    pub(crate) fn do_high_pass(&mut self, frame: &mut eframe::Frame, radius: f32, amount: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_high_pass(d, q, active, radius, amount)
+        });
+        self.force_composite = true;
+    }
+
     /// Motion blur the active layer: directional box average over `distance`
     /// taps each side, oriented at `angle_deg`.
     pub(crate) fn do_motion_blur(

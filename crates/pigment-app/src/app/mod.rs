@@ -282,6 +282,9 @@ pub struct PigmentApp {
     filter_radius: f32,
     filter_amount: f32,
     filter_block: f32,
+    // Sharpen family (Phase 8).
+    high_pass_radius: f32, // Gaussian radius for High Pass (px)
+    high_pass_amount: f32, // detail gain (1 = identity high pass)
     // Blur family (Phase 8).
     motion_angle: f32,    // degrees
     motion_distance: f32, // taps each side
@@ -439,6 +442,8 @@ impl PigmentApp {
             filter_radius: 4.0,
             filter_amount: 1.0,
             filter_block: 8.0,
+            high_pass_radius: 3.0,
+            high_pass_amount: 1.0,
             motion_angle: 0.0,
             motion_distance: 12.0,
             box_radius: 4.0,

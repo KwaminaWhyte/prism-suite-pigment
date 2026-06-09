@@ -31,6 +31,31 @@ impl CanvasGpu {
         radius: f32,
         center: [f32; 2],
     ) {
+        // Single-input pass: alias the secondary texture to `input` (only the
+        // High Pass combine, kind 24, needs a distinct secondary — see
+        // `filter_pass_2`).
+        self.filter_pass_2(
+            device, queue, input, input, output, kind, dir, amount, radius, center,
+        )
+    }
+
+    /// Like `filter_pass_c` but with a distinct secondary input texture bound at
+    /// binding 3 (`orig` in the shader). Used by High Pass (kind 24) to subtract
+    /// a Gaussian-blurred copy (`input`) from the untouched source (`orig`).
+    #[allow(clippy::too_many_arguments)]
+    fn filter_pass_2(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &wgpu::TextureView,
+        orig: &wgpu::TextureView,
+        output: &wgpu::TextureView,
+        kind: u32,
+        dir: [f32; 2],
+        amount: f32,
+        radius: f32,
+        center: [f32; 2],
+    ) {
         let (w, h) = (
             self.canvas_size.width as f32,
             self.canvas_size.height as f32,
@@ -63,6 +88,10 @@ impl CanvasGpu {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.filter_uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(orig),
                 },
             ],
         });
@@ -479,6 +508,57 @@ impl CanvasGpu {
             [seed, 0.0],
             amount,
             0.0,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
+    /// High Pass on the active layer (kind 24): the classic Photoshop sharpen
+    /// prep — subtract a Gaussian-blurred copy from the original and re-centre at
+    /// mid-gray, leaving only the high-frequency detail/edges as a signed
+    /// deviation about 0.5. `radius` is the Gaussian blur radius (larger →
+    /// coarser detail kept); `amount` scales the detail (1 = identity high pass).
+    /// Runs the separable Gaussian (kind 1, H then V) into the layer, then a
+    /// two-input combine pass that reads the blurred layer + the saved original.
+    /// Destructive + undoable (region-COW).
+    pub fn apply_high_pass(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        radius: f32,
+        amount: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "High Pass");
+        let (Some(layer), Some(ping), Some(pong)) =
+            (self.layers.get(&id), self.ping.as_ref(), self.pong.as_ref())
+        else {
+            return;
+        };
+        // Stash the untouched source in `ping` so the combine pass can read it
+        // after the blur has overwritten the layer.
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &layer.tex, &ping.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+        // Separable Gaussian blur in place (kind 1): H into pong, V back into the
+        // layer — mirrors `apply_filter`'s blur path exactly.
+        let tx = [1.0 / self.canvas_size.width as f32, 0.0];
+        let ty = [0.0, 1.0 / self.canvas_size.height as f32];
+        self.filter_pass(device, queue, &layer.view, &pong.view, 1, tx, 0.0, radius);
+        self.filter_pass(device, queue, &pong.view, &layer.view, 1, ty, 0.0, radius);
+        // Combine: input = blurred layer, orig = saved original (ping) → pong.
+        self.filter_pass_2(
+            device,
+            queue,
+            &layer.view,
+            &ping.view,
+            &pong.view,
+            24,
+            [0.0; 2],
+            amount,
+            radius,
             [0.0; 2],
         );
         let mut enc = device.create_command_encoder(&Default::default());

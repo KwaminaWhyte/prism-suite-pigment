@@ -141,6 +141,28 @@ impl eframe::App for PigmentApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    ui.menu_button("Sharpen", |ui| {
+                        // High Pass (Sharpen family): orig − Gaussian blur,
+                        // re-centred at mid-gray. Radius = blur scale, amount =
+                        // detail gain.
+                        ui.add(
+                            egui::Slider::new(&mut self.high_pass_radius, 0.0..=40.0)
+                                .text("high pass radius"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.high_pass_amount, 0.0..=4.0)
+                                .text("amount"),
+                        );
+                        if ui.button("High Pass").clicked() {
+                            self.do_high_pass(
+                                frame,
+                                self.high_pass_radius,
+                                self.high_pass_amount,
+                            );
+                            ui.close_menu();
+                        }
+                    });
+                    ui.separator();
                     ui.menu_button("Pixelate", |ui| {
                         // Pixelate (legacy kind 3: snap to the block-centre
                         // sample) and the cell-based family below it.

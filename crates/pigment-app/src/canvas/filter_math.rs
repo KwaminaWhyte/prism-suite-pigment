@@ -119,6 +119,76 @@ pub fn box_blur(img: &[[f32; 4]], w: usize, h: usize, radius: usize) -> Vec<[f32
     box_blur_axis(&h_pass, w, h, 0, 1, radius)
 }
 
+/// One axis of a separable Gaussian blur (kind 1): a normalized weighted average
+/// of `2·radius+1` taps along `(ax, ay)`, weight `exp(-½·i²/σ²)` with
+/// `σ = max(radius·0.5, 0.5)` — bit-for-bit the WGSL Gaussian so the CPU
+/// reference matches the shader's blur. Use `(1,0)` then `(0,1)` for a full blur.
+pub fn gaussian_blur_axis(
+    img: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    ax: i32,
+    ay: i32,
+    radius: f32,
+) -> Vec<[f32; 4]> {
+    let r = radius.clamp(0.0, 64.0) as i32;
+    let sigma = (radius * 0.5).max(0.5);
+    let mut out = vec![[0.0f32; 4]; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0.0f32; 4];
+            let mut wsum = 0.0f32;
+            for i in -r..=r {
+                let weight = (-0.5 * (i * i) as f32 / (sigma * sigma)).exp();
+                let sx = (x as i32 + ax * i).clamp(0, w as i32 - 1) as usize;
+                let sy = (y as i32 + ay * i).clamp(0, h as i32 - 1) as usize;
+                let s = img[sy * w + sx];
+                for c in 0..4 {
+                    sum[c] += s[c] * weight;
+                }
+                wsum += weight;
+            }
+            let p = y * w + x;
+            for c in 0..4 {
+                out[p][c] = sum[c] / wsum.max(1e-5);
+            }
+        }
+    }
+    out
+}
+
+/// Full separable Gaussian blur (horizontal then vertical pass), mirroring how
+/// the compositor runs the kind-1 shader twice.
+pub fn gaussian_blur(img: &[[f32; 4]], w: usize, h: usize, radius: f32) -> Vec<[f32; 4]> {
+    let h_pass = gaussian_blur_axis(img, w, h, 1, 0, radius);
+    gaussian_blur_axis(&h_pass, w, h, 0, 1, radius)
+}
+
+/// High Pass (kind 24): the classic Photoshop sharpen prep — subtract a
+/// Gaussian-blurred copy from the original and re-centre at mid-gray, so flat
+/// areas go neutral gray and only the high-frequency detail/edges survive as a
+/// signed deviation about 0.5. `radius` is the Gaussian blur radius; `amount`
+/// scales the detail (1 = identity high pass). The difference is taken on the
+/// unpremultiplied colour (so a transparent edge doesn't bias it), clamped to
+/// [0,1], then re-premultiplied keeping the source alpha — matching the shader.
+pub fn high_pass(img: &[[f32; 4]], w: usize, h: usize, radius: f32, amount: f32) -> Vec<[f32; 4]> {
+    let blur = gaussian_blur(img, w, h, radius);
+    let mut out = vec![[0.0f32; 4]; w * h];
+    for i in 0..(w * h) {
+        let src = img[i];
+        let blr = blur[i];
+        let sa = src[3].max(1e-4);
+        let ba = blr[3].max(1e-4);
+        let mut col = [0.0f32; 3];
+        for c in 0..3 {
+            let detail = src[c] / sa - blr[c] / ba;
+            col[c] = (0.5 + detail * amount).clamp(0.0, 1.0);
+        }
+        out[i] = [col[0] * src[3], col[1] * src[3], col[2] * src[3], src[3]];
+    }
+    out
+}
+
 /// Radial blur mode.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RadialMode {
@@ -1618,5 +1688,90 @@ mod tests {
                 p[0]
             );
         }
+    }
+
+    // ---- Sharpen family (High Pass) --------------------------------------
+
+    #[test]
+    fn gaussian_blur_preserves_a_flat_field() {
+        // A normalized Gaussian leaves a flat opaque field untouched.
+        let n = 16;
+        let img = flat_gray(n, 0.5);
+        let out = gaussian_blur(&img, n, n, 4.0);
+        for (a, b) in out.iter().zip(img.iter()) {
+            for c in 0..4 {
+                assert!(approx(a[c], b[c], 1e-4), "flat field preserved by blur");
+            }
+        }
+    }
+
+    #[test]
+    fn high_pass_flattens_to_mid_gray_away_from_edges() {
+        // On a vertical black/white split, columns far from the edge are locally
+        // flat so the blur ≈ the original → the high pass ≈ mid-gray (0.5). The
+        // edge column itself carries the detail and deviates from 0.5.
+        let n = 17;
+        let img = vsplit(n);
+        let row = n / 2;
+        let out = high_pass(&img, n, n, 2.0, 1.0);
+        let flat = out[row * n + 1][0]; // interior of the black side
+        let edge = out[row * n + n / 2][0]; // the boundary column
+        assert!(approx(flat, 0.5, 0.02), "flat area → mid-gray, got {flat}");
+        assert!(
+            (edge - 0.5).abs() > 0.05,
+            "edge carries detail (deviates from mid-gray): {edge}"
+        );
+        // Alpha is preserved everywhere.
+        for p in &out {
+            assert!(approx(p[3], 1.0, 1e-6), "alpha preserved");
+        }
+    }
+
+    #[test]
+    fn high_pass_is_signed_about_mid_gray() {
+        // Either side of a step edge picks up opposite-signed detail: the lighter
+        // side of the transition rises above 0.5, the darker side falls below it
+        // (the blur pulls each toward the local mean).
+        let n = 17;
+        let img = vsplit(n);
+        let row = n / 2;
+        let out = high_pass(&img, n, n, 3.0, 1.0);
+        let c = n / 2;
+        // Just left of the edge (still black=0) → below mid-gray; just right
+        // (white=1) → above mid-gray.
+        let left = out[row * n + (c - 1)][0];
+        let right = out[row * n + c][0];
+        assert!(left < 0.5, "dark side of edge dips below mid-gray: {left}");
+        assert!(right > 0.5, "light side of edge rises above mid-gray: {right}");
+    }
+
+    #[test]
+    fn high_pass_amount_zero_is_flat_mid_gray() {
+        // amount 0 keeps only the +0.5 re-centring → a uniform mid-gray field
+        // regardless of the input detail.
+        let n = 12;
+        let img = vsplit(n);
+        let out = high_pass(&img, n, n, 3.0, 0.0);
+        for p in &out {
+            assert!(approx(p[0], 0.5, 1e-5), "amount 0 → flat mid-gray: {}", p[0]);
+            assert!(approx(p[3], 1.0, 1e-6), "alpha preserved");
+        }
+    }
+
+    #[test]
+    fn high_pass_amount_scales_the_detail() {
+        // A larger amount pushes edge detail further from mid-gray (until clamp).
+        let n = 17;
+        let img = vsplit(n);
+        let row = n / 2;
+        let c = n / 2;
+        let soft = high_pass(&img, n, n, 3.0, 0.5);
+        let hard = high_pass(&img, n, n, 3.0, 1.0);
+        let soft_dev = (soft[row * n + c][0] - 0.5).abs();
+        let hard_dev = (hard[row * n + c][0] - 0.5).abs();
+        assert!(
+            hard_dev > soft_dev,
+            "more amount → stronger detail: {hard_dev} > {soft_dev}"
+        );
     }
 }

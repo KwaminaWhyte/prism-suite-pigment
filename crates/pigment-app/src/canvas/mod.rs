@@ -746,6 +746,9 @@ impl CanvasGpu {
                     },
                     count: None,
                 },
+                // Secondary input texture: for single-input kinds it is aliased
+                // to binding 1, so only High Pass (kind 24) reads it separately.
+                tex_entry(3),
             ],
         });
         let filter_pipeline = make_render_pipeline(
