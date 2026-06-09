@@ -2414,6 +2414,16 @@ impl eframe::App for PigmentApp {
                 } else {
                     None
                 };
+                // A Move/Transform bake of a generated (text/vector) layer shifts
+                // its pixels but not its definition. Record the translate so a
+                // later re-rasterize (font/size/color/align change) re-places the
+                // fresh pixels here instead of snapping back to the canvas origin.
+                if bake && self.xform_translate != egui::Vec2::ZERO {
+                    let id = self.active_id();
+                    if self.is_generated_layer(id) {
+                        *self.gen_offset.entry(id).or_default() += self.xform_translate;
+                    }
+                }
                 self.last_fingerprint = fp;
                 self.force_composite = false;
 

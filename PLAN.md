@@ -216,7 +216,7 @@ pigment/
 - [x] Text layers (`cosmic-text` rasterizer → layer texture): editable text/size/color/**font-family**/align, re-rasterized on edit
 - [x] Vector shape layers: rectangle + ellipse (drag-create), editable fill color, re-rasterized (`pigment_core::shape`, AA)
 - [x] Gradient tool: drag a foreground→transparent linear gradient, composited over the active layer
-- [x] Generated layers stay editable after creation (`sync_generated_layers` re-rasterizes on def change)
+- [x] Generated layers stay editable after creation (`sync_generated_layers` re-rasterizes on def change) — and **keep their position**: a Move/Transform bake records the layer's translate (`gen_offset`), which the re-raster re-applies (via `reposition`) so a property edit (font/size/color/align) no longer snaps the layer to the canvas origin
 - [x] Tests: `pigment_io::text` + `pigment_core::shape` rasterizers
 - [x] **DoD (partial):** text + vector editable after creation ✓; smart objects deferred
 

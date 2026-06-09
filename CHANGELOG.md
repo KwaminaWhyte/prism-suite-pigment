@@ -20,6 +20,22 @@ this project is pre-1.0, so versions are `0.x` milestones.
   and the `TextDef` serde round-trip incl. the legacy (no-`family`) case.
 
 ### Fixed
+- **Text layers keep their position when a property changes (font family, size,
+  color, alignment).** Text/Vector layers carry no position in their definition
+  — their pixels rasterize at the canvas origin — so a Move/Transform *bake*
+  lived only in the layer's pixels. Any property edit re-rasterized at the origin
+  and overwrote the whole texture, discarding the bake and snapping the text back
+  to the top-left. The recently-added font-family change merely made the reset
+  visible; the underlying defect was that re-rasterize ignored the layer's
+  placement. The Move/Transform bake of a generated layer now records its
+  accumulated translate (`gen_offset`, doc px), and `sync_generated_layers`
+  re-applies that offset to the freshly-rasterized buffer (via the existing
+  `reposition` helper) before upload — so *every* re-raster (family/size/color/
+  align) preserves position, undoable as before. The placement is general (not
+  font-family-specific) and needs no model change, so `.pigment` files round-trip
+  unchanged. Tests: a pure unit test that a moved text layer keeps its position
+  across a property/font change (and that a zero/absent offset is a no-op),
+  exercising the exact buffer-placement seam without a GPU.
 - **Move / Transform no longer snaps a layer back to its origin on release**
   (most visible with **Text** layers, which a user cannot reposition at all
   without this). The Move/Transform tools translate the active layer with a

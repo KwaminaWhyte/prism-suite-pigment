@@ -333,6 +333,14 @@ pub struct PigmentApp {
 
     // Phase 4: generated (text/vector) layers re-rasterize when their def changes.
     gen_fp: HashMap<LayerId, u64>,
+    /// Accumulated placement offset (doc px) of each generated (text/vector)
+    /// layer. Generated layers carry no position in their definition — their
+    /// pixels are rasterized at the canvas origin — so a Move/Transform bake's
+    /// translate is recorded here and re-applied on every re-rasterize, keeping
+    /// moved text/shapes in place when a property (family/size/color/align)
+    /// changes. Not persisted: a reloaded `.pigment` reconstructs the layer from
+    /// pixels, which already carry the placement.
+    gen_offset: HashMap<LayerId, egui::Vec2>,
     shape_drag: Option<LayerId>,
     grad_start: Option<egui::Vec2>,
     /// Multi-stop gradient editor state (stops, geometry, dither, presets).
@@ -535,6 +543,7 @@ impl PigmentApp {
             clouds_octaves: 5,
             hist: None,
             gen_fp: HashMap::new(),
+            gen_offset: HashMap::new(),
             shape_drag: None,
             grad_start: None,
             gradient: gradient::GradientEditor::default(),

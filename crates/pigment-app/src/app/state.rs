@@ -122,6 +122,10 @@ impl PigmentApp {
                 }
                 _ => continue,
             };
+            // Generated pixels rasterize at the canvas origin; re-apply any
+            // baked Move/Transform translate so a property edit keeps the layer
+            // where the user placed it instead of snapping to the top-left.
+            let px = place_generated(px, w, h, self.gen_offset.get(&l.id).copied());
             jobs.push((l.id, f32_to_f16_bytes(&px)));
         }
         if jobs.is_empty() {
@@ -287,6 +291,17 @@ impl PigmentApp {
         self.doc.active_layer.unwrap_or(self.background_id)
     }
 
+    /// Whether `id` is a generated (text/vector) layer — one whose pixels are
+    /// re-rasterized from a definition rather than painted. These carry no
+    /// position field, so their placement is tracked in `gen_offset`.
+    pub(crate) fn is_generated_layer(&self, id: LayerId) -> bool {
+        self.doc
+            .layers
+            .layers
+            .iter()
+            .any(|l| l.id == id && matches!(l.kind, LayerKind::Text(_) | LayerKind::Vector(_)))
+    }
+
     pub(crate) fn layer_order(&self) -> Vec<LayerDraw> {
         self.doc
             .layers
@@ -396,6 +411,20 @@ impl PigmentApp {
     }
 }
 
+/// Shift a freshly-rasterized generated layer (full-canvas RGBA-f32) by its
+/// accumulated placement `offset` (doc px). Generated layers rasterize at the
+/// canvas origin, so this re-applies the translate a Move/Transform bake left in
+/// the layer's pixels — keeping moved text/shapes in place across re-rasters.
+/// `None` or a zero offset returns the buffer unchanged (no copy).
+fn place_generated(px: Vec<f32>, w: u32, h: u32, offset: Option<egui::Vec2>) -> Vec<f32> {
+    let Some(off) = offset.filter(|o| *o != egui::Vec2::ZERO) else {
+        return px;
+    };
+    // `reposition` samples src at (x + ox, y + oy); to move content by +off we
+    // read from −off (rounded to whole pixels, matching the bake's integer copy).
+    reposition(&px, w, h, w, h, -off.x.round() as i32, -off.y.round() as i32)
+}
+
 #[cfg(test)]
 mod text_family_tests {
     use super::*;
@@ -449,5 +478,86 @@ mod text_family_tests {
         let legacy = r#"{"text":"Hi","font_px":48.0,"color":[1.0,1.0,1.0,1.0],"align":0}"#;
         let old: TextDef = serde_json::from_str(legacy).expect("deserialize legacy TextDef");
         assert_eq!(old.family, None);
+    }
+
+    /// Top-left of the lit region (alpha > 0.1) in a full-canvas RGBA-f32 buffer,
+    /// as `(min_x, min_y)`; `None` if nothing is lit.
+    fn lit_origin(buf: &[f32], w: u32, h: u32) -> Option<(u32, u32)> {
+        let mut mn: Option<(u32, u32)> = None;
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0.1 {
+                    let (mx, my) = mn.unwrap_or((x, y));
+                    mn = Some((mx.min(x), my.min(y)));
+                }
+            }
+        }
+        mn
+    }
+
+    /// Regression for "moved text snaps back to the top-left after a property
+    /// change". The placement seam (`place_generated`) must re-apply the layer's
+    /// baked Move offset on every re-rasterize, so changing a property (here the
+    /// font family — but the seam is property-agnostic) keeps the glyphs where
+    /// the user dragged them instead of resetting to the canvas origin. Pure: no
+    /// GPU, exercises the exact buffer-placement logic `sync_generated_layers`
+    /// uses.
+    #[test]
+    fn moved_text_keeps_position_after_property_change() {
+        let (w, h) = (160u32, 96u32);
+        let off = egui::vec2(40.0, 24.0);
+
+        // Initial placement: rasterize at origin, then bake a Move of `off`.
+        let base = rasterize(&TextDef::default(), w, h);
+        let base_org = lit_origin(&base, w, h).expect("base text lights pixels");
+        let moved = place_generated(base, w, h, Some(off));
+        let moved_org = lit_origin(&moved, w, h).expect("moved text lights pixels");
+        assert_eq!(
+            moved_org,
+            (base_org.0 + off.x as u32, base_org.1 + off.y as u32),
+            "move shifts the lit region by the offset"
+        );
+
+        // Re-rasterize after a property change (new family) and re-place using the
+        // same stored offset, as `sync_generated_layers` does. The glyphs must
+        // land at the moved origin, NOT back at the (smaller) un-moved origin.
+        let edited = TextDef {
+            family: Some(
+                text::available_families()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Serif".into()),
+            ),
+            ..TextDef::default()
+        };
+        let reraster = rasterize(&edited, w, h);
+        let reraster_org = lit_origin(&reraster, w, h).expect("re-rasterized text lights pixels");
+        let replaced = place_generated(reraster, w, h, Some(off));
+        let replaced_org = lit_origin(&replaced, w, h).expect("replaced text lights pixels");
+
+        assert_eq!(
+            replaced_org,
+            (reraster_org.0 + off.x as u32, reraster_org.1 + off.y as u32),
+            "re-rasterized text after a property change stays at the moved position"
+        );
+        assert!(
+            replaced_org.0 >= off.x as u32 && replaced_org.1 >= off.y as u32,
+            "moved text did not snap back toward the top-left: {replaced_org:?}"
+        );
+    }
+
+    /// A zero (or absent) offset is a no-op: an un-moved generated layer
+    /// re-rasterizes at the origin exactly as before.
+    #[test]
+    fn unmoved_generated_layer_places_at_origin() {
+        let (w, h) = (96u32, 64u32);
+        let buf = rasterize(&TextDef::default(), w, h);
+        let placed_none = place_generated(buf.clone(), w, h, None);
+        let placed_zero = place_generated(buf.clone(), w, h, Some(egui::Vec2::ZERO));
+        assert_eq!(placed_none, buf, "None offset leaves the buffer unchanged");
+        assert_eq!(
+            placed_zero, buf,
+            "zero offset leaves the buffer unchanged"
+        );
     }
 }
