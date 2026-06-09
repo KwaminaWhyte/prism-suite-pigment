@@ -213,7 +213,7 @@ pigment/
 **Deferred (polish):** ~~Curves spline-editor UI~~ (**done** — see Phase 4); Color Balance; clipping & group masks; layer styles (stroke/shadow/glow); motion blur / noise.
 
 ### Phase 4 — Text, vector, smart objects  *(MOSTLY COMPLETE)*
-- [x] Text layers (`cosmic-text` rasterizer → layer texture): editable text/size/color/align, re-rasterized on edit
+- [x] Text layers (`cosmic-text` rasterizer → layer texture): editable text/size/color/**font-family**/align, re-rasterized on edit
 - [x] Vector shape layers: rectangle + ellipse (drag-create), editable fill color, re-rasterized (`pigment_core::shape`, AA)
 - [x] Gradient tool: drag a foreground→transparent linear gradient, composited over the active layer
 - [x] Generated layers stay editable after creation (`sync_generated_layers` re-rasterizes on def change)
@@ -229,7 +229,7 @@ pigment/
 - [x] Curves adjustment **UI** (draggable monotone-cubic editor; composite **+ per-channel R/G/B** curves; LUT uploaded as a 256×1 texture, sampled in the compositor; GPU-pixel-tested)
 - [x] Gradient editor: multi-stop **color rail + independent opacity rail**, all five geometries (**linear/radial/angle/reflected/diamond**), and **ordered (Bayer) dithering** to kill banding; built-in **presets** (Foreground→Transparent, Black→White, Spectrum, Sunset). The gradient tool drag defines the axis (`start→end`, each geometry reinterprets it); a "fill layer" toggle fills the whole layer without dragging. Selection-clipped, source-over onto the active layer, region-COW undo. Sampling/interpolation/dither math is the shared, app-agnostic `prism_core::gradient` (working-space multi-stop lerp, premultiplied output); the app converts sRGB editor stops → linear. Gradient fills persist to `.pigment` as layer pixels (no format change); the shared `Gradient` is serde-ready for embedding presets later. Unit-tested (stop interp incl. unsorted/multi-stop, opacity rail, every geometry's parameterization, seeded-deterministic dither) + serde round-trip + GPU pixel test. *Still:* on-canvas stop handles, reverse, noise gradients, `.grd` import.
 - [ ] Pattern fill / pattern stamp + define-pattern from selection
-- [ ] **Type richness:** character + paragraph panels (kerning/tracking/leading, OpenType features, justification), text-on-path, warp text, type masks
+- [~] **Type richness:** **font-family selection** **done** — a font-family dropdown in the Text layer panel (next to size/color/align) lists "Default" + every system font family (enumerated via the shared `prism_io::text::available_families()`, cached); the chosen family sets `TextDef.family` (`#[serde(default)]` → back-compat) and re-rasterizes via `render_text(..., family)`. *Still:* character + paragraph panels (kerning/tracking/leading, OpenType features, justification), text-on-path, warp text, type masks
 - [ ] **Smart objects** (big — see Phase 7): embedded + linked; non-destructive transform/filter; "edit contents" reopens source; place `.pigment`/`.contour`/image as smart object
 
 ### Phase 5 — Pro features  *(IN PROGRESS — interop landed)*

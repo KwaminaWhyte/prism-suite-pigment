@@ -345,6 +345,12 @@ pub struct PigmentApp {
     // frame we stat the source file; a newer mtime triggers a re-rasterize +
     // re-upload to the SAME layer id. (path, last-seen modified time.)
     linked_contours: HashMap<LayerId, (PathBuf, SystemTime)>,
+
+    /// Font families available to text layers, enumerated once from the system
+    /// font database (via `prism_io::text::available_families`) and cached
+    /// because scanning the DB is expensive. Populated lazily the first time the
+    /// text-layer font chooser is shown.
+    font_families: Vec<String>,
 }
 
 /// Whether the active layer's live affine must be sent to the GPU this frame.
@@ -534,6 +540,7 @@ impl PigmentApp {
             gradient: gradient::GradientEditor::default(),
             grad_fill_pending: None,
             linked_contours: HashMap::new(),
+            font_families: Vec::new(),
         }
     }
 }

@@ -6,6 +6,19 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+### Added
+- **Font-family selection for Text layers** (Type richness). The Text layer
+  panel gains a **font family** dropdown next to the text/size/color/align
+  controls. It lists "Default" (the renderer's default sans-serif face) plus
+  every family in the system font database, enumerated once via the shared
+  `prism_io::text::available_families()` and cached (the DB scan is expensive).
+  Picking a family sets the layer's `TextDef.family`, which changes the layer
+  fingerprint and re-rasterizes the text in the chosen face through
+  `render_text(..., family)`. Back-compatible: `family` defaults to `None`
+  (`#[serde(default)]`), so existing text defs and `.pigment` documents
+  round-trip unchanged. Tests cover default- and selected-family rasterization
+  and the `TextDef` serde round-trip incl. the legacy (no-`family`) case.
+
 ### Fixed
 - **Move / Transform no longer snaps a layer back to its origin on release**
   (most visible with **Text** layers, which a user cannot reposition at all

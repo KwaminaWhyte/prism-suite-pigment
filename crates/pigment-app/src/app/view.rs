@@ -1320,6 +1320,14 @@ impl eframe::App for PigmentApp {
                             ui.separator();
 
                             let active = self.active_id();
+                            // Lazily enumerate system font families once (the DB
+                            // scan is expensive) so the text-layer font chooser
+                            // below can borrow the cached list while iterating
+                            // layers without re-borrowing `self` mutably.
+                            if self.font_families.is_empty() {
+                                self.font_families = text::available_families();
+                            }
+                            let font_families = &self.font_families;
                             let mut action = LayerAction::None;
                             let ids: Vec<LayerId> =
                                 self.doc.layers.layers.iter().rev().map(|l| l.id).collect();
@@ -1409,6 +1417,34 @@ impl eframe::App for PigmentApp {
                                                     egui::TextEdit::singleline(&mut t.text)
                                                         .desired_width(150.0),
                                                 );
+                                                // Font family chooser: "Default"
+                                                // (None → renderer default face)
+                                                // plus every enumerated system
+                                                // family. Selecting a family sets
+                                                // `t.family`, which changes the
+                                                // layer fingerprint and triggers a
+                                                // re-rasterize in the chosen face.
+                                                let current = t
+                                                    .family
+                                                    .as_deref()
+                                                    .unwrap_or("Default");
+                                                egui::ComboBox::from_id_salt(("font", id.0))
+                                                    .selected_text(current)
+                                                    .width(150.0)
+                                                    .show_ui(ui, |ui| {
+                                                        ui.selectable_value(
+                                                            &mut t.family,
+                                                            None,
+                                                            "Default",
+                                                        );
+                                                        for fam in font_families {
+                                                            ui.selectable_value(
+                                                                &mut t.family,
+                                                                Some(fam.clone()),
+                                                                fam,
+                                                            );
+                                                        }
+                                                    });
                                                 ui.add(
                                                     egui::Slider::new(&mut t.font_px, 6.0..=300.0)
                                                         .text("size"),

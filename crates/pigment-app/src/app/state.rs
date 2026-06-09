@@ -71,6 +71,7 @@ impl PigmentApp {
                     t.text.hash(&mut hsh);
                     t.font_px.to_bits().hash(&mut hsh);
                     t.align.hash(&mut hsh);
+                    t.family.hash(&mut hsh);
                     for c in t.color {
                         c.to_bits().hash(&mut hsh);
                     }
@@ -102,7 +103,7 @@ impl PigmentApp {
                         2 => TextAlign::Right,
                         _ => TextAlign::Left,
                     };
-                    text::render_text(&t.text, t.font_px, t.color, w, h, align)
+                    text::render_text(&t.text, t.font_px, t.color, w, h, align, t.family.as_deref())
                 }
                 LayerKind::Vector(v) => {
                     let kind = if v.kind == 1 {
@@ -392,5 +393,61 @@ impl PigmentApp {
                 alpha,
             ],
         }
+    }
+}
+
+#[cfg(test)]
+mod text_family_tests {
+    use super::*;
+
+    /// Rasterize a `TextDef` the way `sync_generated_layers` does: map `align`
+    /// and forward `family` into `render_text`. Pure (no GPU), so it exercises
+    /// the same family-routing logic without a device.
+    fn rasterize(t: &TextDef, w: u32, h: u32) -> Vec<f32> {
+        let align = match t.align {
+            1 => TextAlign::Center,
+            2 => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
+        text::render_text(&t.text, t.font_px, t.color, w, h, align, t.family.as_deref())
+    }
+
+    /// A text layer with no family renders via the default face and still draws.
+    #[test]
+    fn default_family_renders() {
+        let t = TextDef {
+            text: "Ag".into(),
+            ..TextDef::default()
+        };
+        let buf = rasterize(&t, 96, 64);
+        let lit = buf.iter().skip(3).step_by(4).filter(|&&a| a > 0.1).count();
+        assert!(lit > 0, "default-family text should rasterize glyphs");
+    }
+
+    /// Selecting an available system family is honored: the layer rasterizes in
+    /// that face and the family survives the doc model's serde round-trip
+    /// (legacy docs without the key deserialize to `None`).
+    #[test]
+    fn selected_family_rasterizes_and_round_trips() {
+        let families = text::available_families();
+        let chosen = families.first().cloned().unwrap_or_else(|| "Serif".into());
+        let t = TextDef {
+            text: "Ag".into(),
+            family: Some(chosen.clone()),
+            ..TextDef::default()
+        };
+        let buf = rasterize(&t, 96, 64);
+        let lit = buf.iter().skip(3).step_by(4).filter(|&&a| a > 0.1).count();
+        assert!(lit > 0, "text with family {chosen:?} should rasterize glyphs");
+
+        // Doc-model round trip: family persists; a legacy doc (no `family` key)
+        // loads as `None` so old `.pigment` text defs stay back-compatible.
+        let json = serde_json::to_string(&t).expect("serialize TextDef");
+        let back: TextDef = serde_json::from_str(&json).expect("deserialize TextDef");
+        assert_eq!(back.family, Some(chosen));
+
+        let legacy = r#"{"text":"Hi","font_px":48.0,"color":[1.0,1.0,1.0,1.0],"align":0}"#;
+        let old: TextDef = serde_json::from_str(legacy).expect("deserialize legacy TextDef");
+        assert_eq!(old.family, None);
     }
 }
