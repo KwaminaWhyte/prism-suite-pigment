@@ -313,6 +313,43 @@ fn transform_bake_translates() {
     );
 }
 
+// Regression for "move snaps back to origin": the drag-stop frame fires the
+// bake. The bug was that the app cleared the live affine (set_layer_transform
+// with None) on that same frame *before* baking — turning the bake into a no-op
+// (`xform_layer` was None, so `bake_transform` returned early) and snapping the
+// layer back to where it started. The fix keeps the affine live for the bake
+// frame, so the bake must land. This is the GPU half of the seam; the gating
+// fix itself lives in `app::view` (egui interaction, not unit-testable).
+#[test]
+fn move_persists_when_baked_on_drag_stop() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping move_persists_when_baked_on_drag_stop");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let size = Size::new(8, 8);
+    gpu.ensure_canvas(&device, size);
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    gpu.upload_layer(&queue, l0, &solid(8, 1.0, 0.0, 0.0, 1.0)); // red everywhere
+
+    // Drag frames keep the live affine (right by half width) on the layer; the
+    // fixed drag-stop frame re-sends that same affine instead of clearing it,
+    // then issues the bake. With the bug (a None here) the bake was a no-op.
+    gpu.set_layer_transform(Some(l0), [1.0, 0.0, 0.0, 1.0], [-0.5, 0.0]);
+    let mut enc = device.create_command_encoder(&Default::default());
+    gpu.bake_transform(&device, &queue, &mut enc);
+    queue.submit([enc.finish()]);
+
+    let left = gpu.read_pixel(&device, &queue, l0, 1, 4).unwrap();
+    let right = gpu.read_pixel(&device, &queue, l0, 6, 4).unwrap();
+    assert!(left[3] < 0.1, "left half cleared after move persists: {left:?}");
+    assert!(
+        right[0] > 0.9 && right[3] > 0.9,
+        "right half keeps red after move persists: {right:?}"
+    );
+}
+
 // An Invert adjustment layer over a red layer yields cyan in the composite.
 #[test]
 fn adjustment_invert() {

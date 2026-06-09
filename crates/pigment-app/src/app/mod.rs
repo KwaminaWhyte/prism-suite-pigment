@@ -347,6 +347,17 @@ pub struct PigmentApp {
     linked_contours: HashMap<LayerId, (PathBuf, SystemTime)>,
 }
 
+/// Whether the active layer's live affine must be sent to the GPU this frame.
+///
+/// True while a Move/Transform drag is in progress (`active`), and *also* on the
+/// drag-stop frame that bakes it (`bake`): `drag_stopped` clears `active` before
+/// we get here, so without the `bake` term the bake frame would send no affine,
+/// the GPU would clear `xform_layer`, and `bake_transform` would be a no-op —
+/// snapping the layer (text included) back to its origin.
+fn send_layer_xform(active: bool, bake: bool) -> bool {
+    active || bake
+}
+
 /// Build the uv-space layer-from-canvas affine for a translate + uniform scale
 /// about the canvas center. Returns (2x2 matrix [a,b,c,d], offset).
 fn compute_xform(translate: egui::Vec2, scale: f32, size: Size) -> ([f32; 4], [f32; 2]) {
@@ -356,6 +367,36 @@ fn compute_xform(translate: egui::Vec2, scale: f32, size: Size) -> ([f32; 4], [f
     let m = [inv, 0.0, 0.0, inv];
     let off = [0.5 - (0.5 + tx) * inv, 0.5 - (0.5 + ty) * inv];
     (m, off)
+}
+
+#[cfg(test)]
+mod xform_tests {
+    use super::*;
+
+    // The drag-stop (bake) frame must still send the affine even though the
+    // drag is no longer "active" — otherwise the bake is a no-op and the moved
+    // layer (text included) snaps back to its origin.
+    #[test]
+    fn affine_sent_on_bake_frame() {
+        // Mid-drag: active, not yet baking.
+        assert!(send_layer_xform(true, false));
+        // Drag-stop / bake frame: active was just cleared, but bake is set.
+        assert!(send_layer_xform(false, true));
+        // Both set (defensive).
+        assert!(send_layer_xform(true, true));
+        // Idle frame: nothing to send.
+        assert!(!send_layer_xform(false, false));
+    }
+
+    // A pure +half-width translate maps to a layer-from-canvas offset of -0.5.
+    #[test]
+    fn translate_maps_to_uv_offset() {
+        let size = Size::new(100, 50);
+        let (m, off) = compute_xform(egui::vec2(50.0, 0.0), 1.0, size);
+        assert_eq!(m, [1.0, 0.0, 0.0, 1.0]);
+        assert!((off[0] - -0.5).abs() < 1e-6, "off.x = {}", off[0]);
+        assert!(off[1].abs() < 1e-6, "off.y = {}", off[1]);
+    }
 }
 
 impl PigmentApp {

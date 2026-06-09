@@ -6,6 +6,23 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+### Fixed
+- **Move / Transform no longer snaps a layer back to its origin on release**
+  (most visible with **Text** layers, which a user cannot reposition at all
+  without this). The Move/Transform tools translate the active layer with a
+  composite-time uv affine and *bake* it into the layer's pixels on pointer
+  release. The drag-stop frame turns off `xform_active` *before* the frame's
+  affine is computed, so the bake frame was sending `set_layer_transform(None)`
+  — clearing the GPU's `xform_layer` so `bake_transform` returned early (a
+  no-op) while the live preview affine was also dropped, snapping the layer back
+  to where the drag started. The affine is now kept live for the bake frame too
+  (`send_layer_xform(active, bake)`), so the move bakes and persists for every
+  layer kind, undoable exactly as before. Tests: a pure unit test that the
+  affine is still sent on the bake frame (and the translate→uv-offset mapping),
+  plus a GPU regression that a baked move persists (gated on a GPU adapter,
+  skip-on-no-adapter, so the default headless `cargo test` stays green). No
+  model/serde change, so `.pigment` files round-trip unchanged.
+
 ## [0.2.0] - 2026-06-09
 
 ### Added

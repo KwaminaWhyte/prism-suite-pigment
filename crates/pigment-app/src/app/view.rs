@@ -2365,7 +2365,11 @@ impl eframe::App for PigmentApp {
                     Tool::Clone => "Clone Stamp",
                     _ => "Brush",
                 };
-                let xform = if self.xform_active {
+                // Keep the affine live for the bake frame too: `drag_stopped`
+                // clears `xform_active` before this point, but the accumulated
+                // translate/scale must still reach `set_layer_transform` so the
+                // bake has something to bake (otherwise the move snaps back).
+                let xform = if send_layer_xform(self.xform_active, bake) {
                     Some(compute_xform(
                         self.xform_translate,
                         self.xform_scale,
