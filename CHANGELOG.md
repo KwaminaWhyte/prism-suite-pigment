@@ -25,6 +25,17 @@ this project is pre-1.0, so versions are `0.x` milestones.
   runtime↔serde conversion with id remap, and the doc serde round-trip incl. the
   legacy (no-`comps`) case.
 
+### Fixed
+- **Default gradient background now shows on first load.** The freshly staged
+  document (the startup default, plus any opened image/`.pigment`) uploads its
+  pixels to the GPU in the first frame's paint callback, but egui idles after
+  that first frame when there is no pending input, so the canvas could come up
+  blank until the user's first edit forced a repaint. Staging a document now
+  requests a repaint, guaranteeing the document — including the sample gradient
+  background — is composited and presented on load without requiring an edit.
+  Added a headless test asserting the default background's upload buffer is a
+  real, varying gradient (non-empty, non-uniform).
+
 ## [0.3.0] - 2026-06-13
 
 ### Added

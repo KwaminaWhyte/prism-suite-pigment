@@ -12,6 +12,12 @@ impl eframe::App for PigmentApp {
                 }
             });
             self.force_composite = true;
+            // The freshly uploaded pixels (e.g. the default gradient background)
+            // are composited in this frame's paint callback, but egui idles after
+            // the first frame with no pending input. Without a follow-up frame the
+            // canvas can come up blank until the user's first edit forces a
+            // repaint. Schedule one so the document is visible on load.
+            root.ctx().request_repaint();
         }
 
         // A "fill layer with gradient" request from the gradient editor button.

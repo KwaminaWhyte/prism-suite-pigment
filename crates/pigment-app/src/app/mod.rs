@@ -421,6 +421,35 @@ mod xform_tests {
     }
 }
 
+#[cfg(test)]
+mod first_load_tests {
+    use super::*;
+
+    // The default document staged on startup must carry a real, varying gradient
+    // in its background layer's upload buffer. If this were empty/uniform the
+    // canvas would come up blank on first load (the bug we fixed). This is the
+    // exact byte buffer the `pending` upload pushes to the GPU on the first frame.
+    #[test]
+    fn default_background_upload_is_a_real_gradient() {
+        let placeholder = prism_io::placeholder(Size::new(64, 64));
+        let bytes = image_to_f16_bytes(&placeholder);
+
+        // Non-empty: four f16 channels per pixel, two bytes each.
+        let expected_len = (placeholder.size.width * placeholder.size.height) as usize * 4 * 2;
+        assert_eq!(bytes.len(), expected_len, "background buffer is empty/wrong size");
+
+        // The placeholder ramps red across X and green down Y, so the buffer must
+        // not be a single flat color — otherwise nothing would be visible as a
+        // gradient even once composited.
+        let px = f16_bytes_to_f32(&bytes);
+        let first = &px[0..4];
+        assert!(
+            px.chunks_exact(4).any(|p| p[0..4] != *first),
+            "default background is uniform, not a gradient"
+        );
+    }
+}
+
 impl PigmentApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let render_state = cc
