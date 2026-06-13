@@ -667,6 +667,22 @@ impl PigmentApp {
         self.force_composite = true;
     }
 
+    /// Posterize the active layer (destructive): quantize each channel to `levels`
+    /// (2..=255) evenly spaced steps in display (sRGB) space.
+    pub(crate) fn do_posterize(&mut self, frame: &mut eframe::Frame, levels: u32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| gpu.apply_posterize(d, q, active, levels));
+        self.force_composite = true;
+    }
+
+    /// Threshold the active layer (destructive): convert to pure black/white at a
+    /// display-space luma cutoff `level` (0..1).
+    pub(crate) fn do_threshold(&mut self, frame: &mut eframe::Frame, level: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| gpu.apply_threshold(d, q, active, level));
+        self.force_composite = true;
+    }
+
     /// Diffuse the active layer: a seeded-deterministic anisotropic neighbour
     /// scramble — each pixel is replaced by a neighbour up to `amount` px away,
     /// the offset chosen by a hash of (x, y, seed) so the result is stable.

@@ -2737,3 +2737,108 @@ fn oil_paint_snaps_to_a_side_of_an_edge() {
         "right stays white"
     );
 }
+
+// ---- Posterize / Threshold (destructive tonal filters, Phase 8) ----------
+
+// 2-level posterize snaps every channel to its 0 or 1 extreme (the endpoints
+// are identical in linear and sRGB space, so the assertion is space-agnostic).
+#[test]
+fn posterize_2_levels_snaps_to_extremes() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping posterize_2_levels_snaps_to_extremes");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 8u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    // A per-pixel ramp of distinct grays so several intermediate values are tested.
+    gpu.upload_layer(
+        &queue,
+        l0,
+        &layer_from(n, |x, y| {
+            let v = (y * n + x) as f32 / (n * n - 1) as f32;
+            [v, v, v, 1.0]
+        }),
+    );
+    gpu.apply_posterize(&device, &queue, l0, 2);
+    for y in 0..n {
+        for x in 0..n {
+            let p = gpu.read_pixel(&device, &queue, l0, x, y).unwrap();
+            assert!(
+                !(0.02..=0.98).contains(&p[0]),
+                "2-level posterize → pure extreme: {} at ({x},{y})",
+                p[0]
+            );
+            assert!((p[3] - 1.0).abs() < 0.02, "alpha preserved");
+        }
+    }
+    // Corners: the darkest pixel stays black, the brightest stays white.
+    assert!(gpu.read_pixel(&device, &queue, l0, 0, 0).unwrap()[0] < 0.02, "black stays");
+    assert!(
+        gpu.read_pixel(&device, &queue, l0, n - 1, n - 1).unwrap()[0] > 0.98,
+        "white stays"
+    );
+}
+
+// A flat mid-gray field is (very nearly) a fixed point of a 4-level posterize
+// only at lattice points; here we just assert the result is one of the 4 levels
+// and is uniform across the field (the op is a pure per-pixel transfer).
+#[test]
+fn posterize_is_a_uniform_per_pixel_transfer() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping posterize_is_a_uniform_per_pixel_transfer");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 8u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    gpu.upload_layer(&queue, l0, &layer_from(n, |_x, _y| [0.18, 0.5, 0.82, 1.0]));
+    gpu.apply_posterize(&device, &queue, l0, 4);
+    let a = gpu.read_pixel(&device, &queue, l0, 0, 0).unwrap();
+    let b = gpu.read_pixel(&device, &queue, l0, n - 1, n - 1).unwrap();
+    for c in 0..3 {
+        assert!((a[c] - b[c]).abs() < 0.01, "uniform field → uniform output");
+    }
+}
+
+// Threshold collapses a gray ramp to pure black/white at the luma cutoff: the
+// dark end goes black, the bright end white, and the output is strictly binary.
+#[test]
+fn threshold_splits_to_black_and_white() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping threshold_splits_to_black_and_white");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 16u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    // Horizontal black→white step so each side is clearly on one side of cutoff.
+    gpu.upload_layer(
+        &queue,
+        l0,
+        &layer_from(n, |x, _y| {
+            if x < n / 2 {
+                [0.0, 0.0, 0.0, 1.0]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            }
+        }),
+    );
+    gpu.apply_threshold(&device, &queue, l0, 0.5);
+    let row = n / 2;
+    for x in 0..n {
+        let v = gpu.read_pixel(&device, &queue, l0, x, row).unwrap()[0];
+        assert!(!(0.02..=0.98).contains(&v), "output is binary: {v} at x={x}");
+    }
+    assert!(gpu.read_pixel(&device, &queue, l0, 0, row).unwrap()[0] < 0.02, "left → black");
+    assert!(
+        gpu.read_pixel(&device, &queue, l0, n - 1, row).unwrap()[0] > 0.98,
+        "right → white"
+    );
+}

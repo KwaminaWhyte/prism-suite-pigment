@@ -7,6 +7,26 @@ this project is pre-1.0, so versions are `0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Filter · Adjustments · Posterize / Threshold** (destructive tonal ops). The
+  Filter menu gains an **Adjustments** submenu with two destructive, undoable
+  bake-into-the-layer operations (the counterpart to the existing non-destructive
+  Posterize/Threshold *adjustment layers*): **Posterize** quantizes each colour
+  channel to *N* evenly spaced levels (a **levels** slider, 2–32; the engine
+  accepts 2–255) and **Threshold** collapses the layer to pure black/white at a
+  Rec.709 luma cutoff (a **threshold** slider, 0–1). Both quantize in **display
+  (sRGB) space** so the steps/cutoff land where the user sees them — quantizing in
+  linear light would bunch the levels in the shadows — unpremultiplying, encoding
+  to sRGB, snapping, decoding back to linear and re-premultiplying, with alpha
+  preserved. They run as single GPU filter passes (shader kinds 28/29 via
+  `filter_pass_c`), destructive and undoable (region-COW) like the blur / distort
+  / stylize / noise filters, and are mirrored by CPU references
+  (`filter_math::posterize` / `::threshold`) sharing the sRGB transfer constants.
+  Tested: CPU unit tests (Posterize at 2 levels snaps every channel to its 0/1
+  extreme and quantizes a ramp to ≤N steps; Threshold splits a ramp at the cutoff
+  into a strictly binary result, with the 0 / >1 extremes passing all / nothing)
+  plus GPU pixel tests with the skip-on-no-adapter convention (same properties,
+  alpha preserved, uniform per-pixel transfer). Implemented entirely app-local —
+  no change to the shared `prism-core` `Adjustment` enum.
 - **Stylize · Oil Paint** (Filter Gallery). A new entry in the **Stylize** filter
   menu applies a Kuwahara quadrant filter to the active layer: each pixel is
   replaced by the mean colour of the lowest-luma-variance quadrant of its

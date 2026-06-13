@@ -310,6 +310,8 @@ pub struct PigmentApp {
     diffuse_amount: f32,    // max neighbour displacement (px)
     diffuse_seed: f32,      // deterministic scramble seed
     oil_paint_radius: f32,  // oil-paint (Kuwahara) quadrant half-size (px)
+    posterize_levels: u32,  // destructive posterize level count (2..=255)
+    threshold_level: f32,   // destructive threshold luma cutoff (0..1)
     // Noise family (Phase 8).
     noise_amount: f32,      // add-noise strength (0..1)
     noise_mono: bool,       // monochromatic (same noise on R/G/B)
@@ -564,6 +566,8 @@ impl PigmentApp {
             diffuse_amount: 4.0,
             diffuse_seed: 1.0,
             oil_paint_radius: 3.0,
+            posterize_levels: 4,
+            threshold_level: 0.5,
             noise_amount: 0.1,
             noise_mono: false,
             noise_gaussian: true,

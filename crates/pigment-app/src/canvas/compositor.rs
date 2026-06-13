@@ -644,6 +644,68 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Posterize the active layer (kind 28): quantize each colour channel to
+    /// `levels` (2..=255) evenly spaced steps in display (sRGB) space, the classic
+    /// destructive Image ▸ Adjustments ▸ Posterize. Alpha is preserved. Single
+    /// pass; destructive + undoable (region-COW).
+    pub fn apply_posterize(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        levels: u32,
+    ) {
+        self.begin_command_now(device, queue, id, "Posterize");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            28,
+            [0.0; 2],
+            levels.clamp(2, 255) as f32,
+            0.0,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
+    /// Threshold the active layer (kind 29): convert to pure black/white at a
+    /// display-space Rec.709 luma cutoff `level` (0..1) — at/above → white, below
+    /// → black — the destructive Image ▸ Adjustments ▸ Threshold. Alpha is
+    /// preserved. Single pass; destructive + undoable (region-COW).
+    pub fn apply_threshold(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        level: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Threshold");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            29,
+            [0.0; 2],
+            level.clamp(0.0, 1.0),
+            0.0,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.
     pub fn composite_now(
         &mut self,

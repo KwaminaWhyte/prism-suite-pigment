@@ -10,7 +10,9 @@ struct FParams {
     // 20 mosaic, 21 crystallize, 22 color halftone, 23 mezzotint,
     // 24 high pass (orig - blur, re-centred at mid-gray),
     // 25 clouds (fBm value-noise generator), 26 difference clouds
-    // (|source - clouds|), 27 oil paint (Kuwahara quadrant filter).
+    // (|source - clouds|), 27 oil paint (Kuwahara quadrant filter),
+    // 28 posterize (quantize each channel to N display-space levels),
+    // 29 threshold (luma cutoff → pure black/white).
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -23,7 +25,8 @@ struct FParams {
                       // color halftone: (cos angle, sin angle) screen rotation;
                       // crystallize/mezzotint: (seed, _);
                       // clouds/difference clouds: (seed, roughness)
-    amount: f32,      // sharpen amount; radial: spin angle (rad) / zoom fraction;
+    amount: f32,      // posterize: level count N (2..255); threshold: luma cutoff
+                      // (0..1); sharpen amount; radial: spin angle (rad) / zoom fraction;
                       // twirl: max angle (rad); pinch: signed amount (-1..1);
                       // emboss: height/relief gain; glowing edges: brightness;
                       // diffuse: max neighbour displacement in pixels; add noise:
@@ -70,6 +73,14 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 fn hash21(ix: f32, iy: f32, seed: f32) -> f32 {
     return fract(sin(dot(vec2<f32>(ix, iy), vec2<f32>(12.9898, 78.233)) + seed) * 43758.5453);
 }
+
+// sRGB transfer pair (same constants as composite.wgsl / prism-color). Posterize
+// and Threshold work in *display* (sRGB) space so the levels land where the user
+// sees them — quantizing in linear light would bunch the steps in the shadows.
+fn l2s1(c: f32) -> f32 { if c <= 0.0031308 { return c * 12.92; } return 1.055 * pow(c, 1.0 / 2.4) - 0.055; }
+fn s2l1(c: f32) -> f32 { if c <= 0.04045 { return c / 12.92; } return pow((c + 0.055) / 1.055, 2.4); }
+fn l2s(c: vec3<f32>) -> vec3<f32> { return vec3<f32>(l2s1(c.x), l2s1(c.y), l2s1(c.z)); }
+fn s2l(c: vec3<f32>) -> vec3<f32> { return vec3<f32>(s2l1(c.x), s2l1(c.y), s2l1(c.z)); }
 
 // One zero-mean uniform noise sample in (-1, 1): the difference of two i.i.d.
 // hashes, symmetric about 0 so the per-channel mean is preserved.
@@ -603,6 +614,32 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
         return best_mean;
+    } else if p.kind == 28u {
+        // ---- Posterize (kind 28): quantize each channel to `amount` (=N) evenly
+        // spaced levels in *display* (sRGB) space, the classic Image ▸ Adjustments
+        // ▸ Posterize. Unpremultiply, encode to sRGB, snap each channel to the
+        // nearest of N levels — floor(c·(N−1)+0.5)/(N−1) — decode back to linear
+        // and re-premultiply. Alpha is preserved. With N=2 every channel snaps to
+        // its 0 or 1 extreme.
+        let src = textureSample(input, samp, in.uv);
+        let a = max(src.a, 1e-4);
+        let levels = max(floor(p.amount + 0.5), 2.0);
+        let s = l2s(src.rgb / a);
+        let q = floor(s * (levels - 1.0) + 0.5) / (levels - 1.0);
+        let lin = s2l(clamp(q, vec3<f32>(0.0), vec3<f32>(1.0)));
+        return vec4<f32>(lin * src.a, src.a);
+    } else if p.kind == 29u {
+        // ---- Threshold (kind 29): convert to pure black/white by comparing each
+        // pixel's display-space Rec.709 luma against the `amount` cutoff (0..1).
+        // At/above the cutoff → white, below → black. Compute luma on the sRGB
+        // (display) colour so the cutoff matches the histogram the user sees;
+        // alpha is preserved.
+        let src = textureSample(input, samp, in.uv);
+        let a = max(src.a, 1e-4);
+        let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+        let luma = dot(l2s(src.rgb / a), lw);
+        let v = select(0.0, 1.0, luma >= p.amount);
+        return vec4<f32>(vec3<f32>(v) * src.a, src.a);
     } else if p.kind == 16u {
         // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
         // swap. Replace each pixel with one of its neighbours within `amount`

@@ -506,6 +506,32 @@ impl eframe::App for PigmentApp {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button("Adjustments", |ui| {
+                        // Destructive, undoable tonal ops (vs the non-destructive
+                        // Adjustment layers). Posterize quantizes each channel to N
+                        // display-space levels; Threshold collapses to black/white
+                        // at a luma cutoff. Both bake into the active layer.
+                        let mut lv = self.posterize_levels as f32;
+                        if ui
+                            .add(egui::Slider::new(&mut lv, 2.0..=32.0).text("levels"))
+                            .changed()
+                        {
+                            self.posterize_levels = lv.round() as u32;
+                        }
+                        if ui.button("Posterize").clicked() {
+                            self.do_posterize(frame, self.posterize_levels);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.add(
+                            egui::Slider::new(&mut self.threshold_level, 0.0..=1.0)
+                                .text("threshold"),
+                        );
+                        if ui.button("Threshold").clicked() {
+                            self.do_threshold(frame, self.threshold_level);
+                            ui.close_menu();
+                        }
+                    });
                 });
                 ui.menu_button("Select", |ui| {
                     if ui.button("All").clicked() {
