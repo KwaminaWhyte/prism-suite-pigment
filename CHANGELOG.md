@@ -26,15 +26,22 @@ this project is pre-1.0, so versions are `0.x` milestones.
   legacy (no-`comps`) case.
 
 ### Fixed
-- **Default gradient background now shows on first load.** The freshly staged
-  document (the startup default, plus any opened image/`.pigment`) uploads its
-  pixels to the GPU in the first frame's paint callback, but egui idles after
-  that first frame when there is no pending input, so the canvas could come up
-  blank until the user's first edit forced a repaint. Staging a document now
-  requests a repaint, guaranteeing the document — including the sample gradient
-  background — is composited and presented on load without requiring an edit.
-  Added a headless test asserting the default background's upload buffer is a
-  real, varying gradient (non-empty, non-uniform).
+- **Default gradient background now shows on first load.** A freshly staged
+  document (the startup default, plus any opened image/`.pigment`) came up as a
+  blank/transparent canvas until the user's first edit. Root cause: the per-frame
+  composite is recorded into egui's paint-callback (`prepare`) command encoder,
+  which doesn't reliably execute while egui is **idle** immediately after load —
+  so the uploaded layer pixels were never composited into the displayed buffer
+  until an edit (which composites through a self-submitting path) forced it. (The
+  layer texture was correct all along — verified by GPU read-back — but the
+  composite output stayed transparent.) Staging a document now runs an initial
+  composite through the **self-submitting** `composite_now` (its own encoder +
+  `queue.submit`, the same path edit operations use) and builds the display bind
+  group from it, so the document — including the sample gradient background — is
+  presented on the very first frame. The pixel upload is also no longer consumed
+  until the GPU state is actually ready (it retries next frame), so a not-yet-
+  initialized render state can't silently drop the document. A headless test
+  asserts the default background's upload buffer is a real, varying gradient.
 
 ## [0.3.0] - 2026-06-13
 

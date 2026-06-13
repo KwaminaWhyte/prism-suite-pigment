@@ -3,20 +3,38 @@ use super::*;
 impl eframe::App for PigmentApp {
     fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
         // Process any staged GPU uploads (new/opened document) before painting.
-        if let Some(pend) = self.pending.take() {
-            with_gpu(frame, |gpu, device, queue| {
+        // Only clear `pending` once the upload actually ran: if the wgpu render
+        // state / CanvasGpu isn't ready yet (can happen on the first frame),
+        // `with_gpu` is a no-op returning None — consuming `pending` then would
+        // drop the document's pixels permanently (blank canvas until an edit).
+        if self.pending.is_some() {
+            // The per-frame composite is recorded into egui's paint-callback
+            // (`prepare`) encoder, which doesn't reliably execute while egui is
+            // idle immediately after load — so the default document (e.g. the
+            // gradient background) could stay blank until the first edit forced
+            // egui to render. Composite once here through the **self-submitting**
+            // `composite_now` (its own encoder + `queue.submit`, the same path the
+            // edit operations use) and build the display bind group from it, so
+            // the document is presented on the very first frame.
+            let order = self.layer_order();
+            let uploaded = with_gpu(frame, |gpu, device, queue| {
+                let pend = self.pending.as_ref().expect("pending checked above");
                 gpu.ensure_canvas(device, pend.size);
                 for (id, bytes) in &pend.layers {
                     gpu.ensure_layer(device, *id);
                     gpu.upload_layer(queue, *id, bytes);
                 }
-            });
+                let final_is_ping = gpu.composite_now(device, queue, &order);
+                gpu.build_display_bind_group(device, final_is_ping);
+            })
+            .is_some();
+            if !uploaded {
+                // GPU not ready this frame — keep `pending` and try next frame.
+                root.ctx().request_repaint();
+                return;
+            }
+            self.pending = None;
             self.force_composite = true;
-            // The freshly uploaded pixels (e.g. the default gradient background)
-            // are composited in this frame's paint callback, but egui idles after
-            // the first frame with no pending input. Without a follow-up frame the
-            // canvas can come up blank until the user's first edit forces a
-            // repaint. Schedule one so the document is visible on load.
             root.ctx().request_repaint();
         }
 
