@@ -6,6 +6,8 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-13
+
 ### Added
 - **Font-family selection for Text layers** (Type richness). The Text layer
   panel gains a **font family** dropdown next to the text/size/color/align
