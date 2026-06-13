@@ -1259,6 +1259,70 @@ impl eframe::App for PigmentApp {
                             });
 
                             ui.separator();
+                            egui::CollapsingHeader::new(format!(
+                                "Layer Comps  ({})",
+                                self.comps.len()
+                            ))
+                            .show(ui, |ui| {
+                                // Create a comp from the current layer state.
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.new_comp_name)
+                                            .desired_width(120.0)
+                                            .hint_text("Comp name"),
+                                    );
+                                    if ui.button("Capture").clicked() {
+                                        let name = if self.new_comp_name.trim().is_empty() {
+                                            format!("Comp {}", self.comps.len() + 1)
+                                        } else {
+                                            self.new_comp_name.trim().to_string()
+                                        };
+                                        let comp = super::comps::capture_comp(
+                                            name,
+                                            &self.doc.layers.layers,
+                                        );
+                                        self.comps.push(comp);
+                                        self.new_comp_name.clear();
+                                    }
+                                });
+                                // List existing comps: restore / rename / delete.
+                                let mut to_apply: Option<usize> = None;
+                                let mut to_delete: Option<usize> = None;
+                                for (i, comp) in self.comps.iter_mut().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        if ui
+                                            .small_button("▶")
+                                            .on_hover_text("Restore this comp")
+                                            .clicked()
+                                        {
+                                            to_apply = Some(i);
+                                        }
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut comp.name)
+                                                .desired_width(120.0),
+                                        );
+                                        if ui
+                                            .small_button("✕")
+                                            .on_hover_text("Delete this comp")
+                                            .clicked()
+                                        {
+                                            to_delete = Some(i);
+                                        }
+                                    });
+                                }
+                                if let Some(i) = to_apply {
+                                    super::comps::apply_comp(
+                                        &self.comps[i],
+                                        &mut self.doc.layers.layers,
+                                    );
+                                    self.force_composite = true;
+                                }
+                                if let Some(i) = to_delete {
+                                    self.comps.remove(i);
+                                }
+                            });
+
+                            ui.separator();
                             ui.horizontal(|ui| {
                                 ui.heading("Layers");
                                 if ui

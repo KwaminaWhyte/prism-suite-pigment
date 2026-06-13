@@ -6,6 +6,25 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+### Added
+- **Layer comps** (Layer power). The Layers panel gains a **Layer Comps** section
+  where you can **Capture** a named snapshot of every layer's appearance —
+  visibility, opacity, and blend mode — and later **Restore** it with one click,
+  plus inline **rename** and **delete**. The capture/restore logic is a pure
+  function over the layer list (`app::comps`), keyed by stable `LayerId`, so
+  restoring is robust to layers being reordered, added, or removed since capture
+  (added layers are left untouched; entries for removed layers are ignored).
+  Position/transform is intentionally out of scope — Pigment layers carry no
+  persistent position in their model (Move/Transform bakes into pixels), so a
+  comp captures the appearance attributes that live on the layer. Comps persist
+  in the `.pigment` document via a new additive `DocMeta.comps` field
+  (`#[serde(default)]` + `skip_serializing_if`), so existing documents round-trip
+  unchanged and comp-free documents stay byte-compatible. On load, saved layer
+  ids are remapped to the freshly allocated ids. Tests cover capture→restore
+  round-trips, restore reverting edits, robustness to add/remove/reorder, the
+  runtime↔serde conversion with id remap, and the doc serde round-trip incl. the
+  legacy (no-`comps`) case.
+
 ## [0.3.0] - 2026-06-13
 
 ### Added

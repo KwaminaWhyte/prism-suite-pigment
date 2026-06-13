@@ -195,8 +195,12 @@ impl PigmentApp {
         self.clear_all_layer_styles();
         let mut staged = Vec::new();
         let mut loaded_styles: Vec<(LayerId, RuntimeLayerStyles)> = Vec::new();
+        // Layers get fresh ids on load; map saved id -> new id so layer comps
+        // (keyed by saved id) can be remapped onto the loaded layers.
+        let mut id_map: HashMap<u64, LayerId> = HashMap::new();
         for (i, lm) in meta.layers.iter().enumerate() {
             let id = doc.layers.alloc_id();
+            id_map.insert(lm.id, id);
             // Adjustment layers carry a serialized `Adjustment` descriptor;
             // restore them as adjustment layers (kind + params). Everything else
             // (including old docs with no `adjustment` key) loads as raster.
@@ -222,6 +226,13 @@ impl PigmentApp {
             .unwrap_or(LayerId(0));
         doc.active_layer = doc.layers.layers.last().map(|l| l.id);
         self.doc = doc;
+        // Restore layer comps, remapping saved layer ids to the freshly allocated
+        // ones; entries for layers absent from this document are dropped.
+        self.comps = meta
+            .comps
+            .iter()
+            .map(|m| super::comps::meta_to_comp(m, &id_map))
+            .collect();
         for (id, rt) in &loaded_styles {
             self.install_runtime_styles(*id, rt);
         }
@@ -499,6 +510,7 @@ impl PigmentApp {
                     },
                 })
                 .collect(),
+            comps: self.comps.iter().map(super::comps::comp_to_meta).collect(),
         };
         let ids: Vec<LayerId> = self.doc.layers.layers.iter().map(|l| l.id).collect();
         let pixels = with_gpu(frame, |gpu, device, queue| {

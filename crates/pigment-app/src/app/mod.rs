@@ -359,6 +359,14 @@ pub struct PigmentApp {
     /// because scanning the DB is expensive. Populated lazily the first time the
     /// text-layer font chooser is shown.
     font_families: Vec<String>,
+
+    /// Named layer comps: snapshots of per-layer appearance (visibility,
+    /// opacity, blend mode) the user can create, restore, rename, and delete.
+    /// Persisted in the `.pigment` document. See the `comps` module for the pure
+    /// capture/restore model.
+    comps: Vec<comps::LayerComp>,
+    /// Scratch buffer for the "new comp" name field in the Layers panel.
+    new_comp_name: String,
 }
 
 /// Whether the active layer's live affine must be sent to the GPU this frame.
@@ -550,11 +558,14 @@ impl PigmentApp {
             grad_fill_pending: None,
             linked_contours: HashMap::new(),
             font_families: Vec::new(),
+            comps: Vec::new(),
+            new_comp_name: String::new(),
         }
     }
 }
 
 mod adjustments;
+mod comps;
 mod edit;
 mod gradient;
 mod io;
