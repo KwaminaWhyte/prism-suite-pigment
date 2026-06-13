@@ -386,6 +386,50 @@ impl eframe::App for PigmentApp {
                             );
                             ui.close_menu();
                         }
+                        ui.separator();
+                        // Iris Blur (Blur Gallery): sharp inside an ellipse at the
+                        // canvas center, blur falls off radially outside it.
+                        ui.add(
+                            egui::Slider::new(&mut self.iris_rx, 10.0..=2000.0)
+                                .text("ellipse width"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.iris_ry, 10.0..=2000.0)
+                                .text("ellipse height"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.iris_feather, 0.05..=3.0)
+                                .text("feather"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.iris_radius, 0.0..=40.0)
+                                .text("max blur"),
+                        );
+                        if ui.button("Iris Blur").clicked() {
+                            self.do_iris_blur(
+                                frame,
+                                self.iris_rx,
+                                self.iris_ry,
+                                self.iris_feather,
+                                self.iris_radius,
+                            );
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Spin Blur (Blur Gallery): rotational motion blur about
+                        // the canvas center over a blur angle.
+                        ui.add(
+                            egui::Slider::new(&mut self.spin_angle, 0.0..=90.0)
+                                .text("blur angle°"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.spin_samples, 4..=64)
+                                .text("quality (samples)"),
+                        );
+                        if ui.button("Spin Blur").clicked() {
+                            self.do_spin_blur(frame, self.spin_angle, self.spin_samples);
+                            ui.close_menu();
+                        }
                     });
                     ui.menu_button("Distort", |ui| {
                         // Twirl (angle + radius about the canvas center).

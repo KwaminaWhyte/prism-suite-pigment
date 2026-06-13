@@ -13,7 +13,8 @@ struct FParams {
     // (|source - clouds|), 27 oil paint (Kuwahara quadrant filter),
     // 28 posterize (quantize each channel to N display-space levels),
     // 29 threshold (luma cutoff → pure black/white),
-    // 30 tilt-shift (graduated focus blur: sharp band, blur falls off outside).
+    // 30 tilt-shift (graduated focus blur: sharp band, blur falls off outside),
+    // 31 iris blur (radial focus blur: sharp inside an ellipse, blur outside).
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -141,6 +142,20 @@ fn focus_weight(dist: f32, half_band: f32, feather: f32) -> f32 {
     }
     let f = max(feather, 1e-3);
     return clamp((d - half_band) / f, 0.0, 1.0);
+}
+
+// Iris focus weight in [0,1] from the normalized elliptical radius `e`
+// (e = sqrt((dx/rx)^2 + (dy/ry)^2); e <= 1 is inside the ellipse). Returns 0
+// inside the ellipse (fully sharp) and ramps smoothly to 1 once past the
+// boundary by `feather` (a normalized fraction of the ellipse radius), so a
+// `feather` of 1 fully blurs at twice the radius. Kept as a standalone `fn`
+// so the CPU reference (`iris_weight`) can match it bit-for-bit.
+fn iris_weight(e: f32, feather: f32) -> f32 {
+    if e <= 1.0 {
+        return 0.0;
+    }
+    let f = max(feather, 1e-3);
+    return clamp((e - 1.0) / f, 0.0, 1.0);
 }
 
 @fragment
@@ -679,6 +694,43 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let half_band = p.amount;
         let feather = p.center.x;                // feather (px) packed in center.x
         let wgt = focus_weight(dist, half_band, feather);
+        let rad = p.radius * wgt;
+        let r = i32(clamp(rad, 0.0, 64.0));
+        if r <= 0 {
+            return textureSample(input, samp, in.uv);
+        }
+        let sigma = max(rad * 0.5, 0.5);
+        var sum = vec4<f32>(0.0);
+        var wsum = 0.0;
+        for (var j = -r; j <= r; j = j + 1) {
+            for (var i = -r; i <= r; i = i + 1) {
+                let w = exp(-0.5 * f32(i * i + j * j) / (sigma * sigma));
+                sum = sum + textureSample(
+                    input, samp,
+                    in.uv + vec2<f32>(f32(i), f32(j)) * p.texel,
+                ) * w;
+                wsum = wsum + w;
+            }
+        }
+        return sum / max(wsum, 1e-5);
+    } else if p.kind == 31u {
+        // ---- Iris Blur (kind 31): the radial sibling of Tilt-Shift. The image
+        // stays sharp inside an elliptical region centred at `center` (uv) with
+        // pixel radii `dir = (rx, ry)`, and blurs progressively outside it.
+        // `amount` is the feather (normalized fraction of the ellipse radius)
+        // and `radius` the max blur radius (px). Per pixel we form the
+        // normalized elliptical radius, turn it into a focus weight in [0,1]
+        // (0 = sharp, 1 = fully blurred), scale the Gaussian tap radius by it and
+        // run a single 2D Gaussian. Inside the ellipse the radius is 0, so the
+        // pixel is returned untouched.
+        let dim = 1.0 / p.texel;                 // (w, h) in px
+        let px = in.uv * dim;                    // this pixel in px
+        let cpx = p.center * dim;                // ellipse center in px
+        let rx = max(p.dir.x, 1e-3);
+        let ry = max(p.dir.y, 1e-3);
+        let off = px - cpx;
+        let e = sqrt((off.x / rx) * (off.x / rx) + (off.y / ry) * (off.y / ry));
+        let wgt = iris_weight(e, p.amount);
         let rad = p.radius * wgt;
         let r = i32(clamp(rad, 0.0, 64.0));
         if r <= 0 {

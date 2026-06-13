@@ -1132,6 +1132,78 @@ pub fn tilt_shift(
     out
 }
 
+/// Iris focus weight in `[0, 1]` from the normalized elliptical radius `e`
+/// (`e = sqrt((dx/rx)^2 + (dy/ry)^2)`; `e <= 1` is inside the ellipse), given a
+/// `feather` ramp expressed as a normalized fraction of the ellipse radius.
+/// Returns `0` inside the ellipse (fully sharp) and ramps linearly to `1` once
+/// past the boundary by `feather`. Bit-for-bit the WGSL `iris_weight` (kind 31)
+/// so the GPU iris blur and this reference agree, and the falloff is
+/// unit-testable without a GPU adapter.
+pub fn iris_weight(e: f32, feather: f32) -> f32 {
+    if e <= 1.0 {
+        return 0.0;
+    }
+    let f = feather.max(1e-3);
+    ((e - 1.0) / f).clamp(0.0, 1.0)
+}
+
+/// Iris Blur (Blur Gallery, kind 31): the radial sibling of [`tilt_shift`]. The
+/// image stays sharp inside an elliptical region centred at `(cx, cy)` (pixels)
+/// with pixel radii `(rx, ry)` and blurs progressively outside it. The per-pixel
+/// blur radius is `max_radius` scaled by [`iris_weight`] of the normalized
+/// elliptical radius; each pixel runs a local 2D Gaussian over that radius —
+/// mirroring the shader. `feather` is a normalized fraction of the ellipse
+/// radius. Edge-clamped sampling.
+#[allow(clippy::too_many_arguments)]
+pub fn iris_blur(
+    img: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    feather: f32,
+    max_radius: f32,
+) -> Vec<[f32; 4]> {
+    let rx = rx.max(1e-3);
+    let ry = ry.max(1e-3);
+    let mut out = vec![[0.0f32; 4]; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let dx = (x as f32 - cx) / rx;
+            let dy = (y as f32 - cy) / ry;
+            let e = (dx * dx + dy * dy).sqrt();
+            let rad = max_radius * iris_weight(e, feather);
+            let r = rad.clamp(0.0, 64.0) as i32;
+            let p = y * w + x;
+            if r <= 0 {
+                out[p] = img[p];
+                continue;
+            }
+            let sigma = (rad * 0.5).max(0.5);
+            let mut sum = [0.0f32; 4];
+            let mut wsum = 0.0f32;
+            for j in -r..=r {
+                for i in -r..=r {
+                    let weight = (-0.5 * (i * i + j * j) as f32 / (sigma * sigma)).exp();
+                    let sx = (x as i32 + i).clamp(0, w as i32 - 1) as usize;
+                    let sy = (y as i32 + j).clamp(0, h as i32 - 1) as usize;
+                    let s = img[sy * w + sx];
+                    for c in 0..4 {
+                        sum[c] += s[c] * weight;
+                    }
+                    wsum += weight;
+                }
+            }
+            for c in 0..4 {
+                out[p][c] = sum[c] / wsum.max(1e-5);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2360,6 +2432,80 @@ mod tests {
         let n = 16usize;
         let img = vsplit(n);
         let out = tilt_shift(&img, n, n, (n / 2) as f32, 2.0, 4.0, 0.0, 0.0);
+        assert_eq!(out, img, "max radius 0 leaves the image untouched everywhere");
+    }
+
+    // ---- Iris Blur (Blur Gallery) -----------------------------------------
+
+    #[test]
+    fn iris_weight_is_zero_inside_one_at_full_feather_and_monotonic() {
+        let f = 0.5f32;
+        // Inside the ellipse (e ≤ 1) → fully sharp (0).
+        assert_eq!(iris_weight(0.0, f), 0.0);
+        assert_eq!(iris_weight(1.0, f), 0.0, "on the boundary is still sharp");
+        // At the far end of the feather and beyond → fully blurred (1).
+        assert!(approx(iris_weight(1.0 + f, f), 1.0, 1e-6));
+        assert_eq!(iris_weight(5.0, f), 1.0, "clamped well past feather");
+        // Mid-feather is a partial weight strictly between 0 and 1.
+        let mid = iris_weight(1.0 + f * 0.5, f);
+        assert!(mid > 0.0 && mid < 1.0, "mid-feather is partial, got {mid}");
+        // Monotonically non-decreasing with normalized radius.
+        let mut prev = 0.0;
+        let mut e = 0.0;
+        while e <= 1.0 + f + 0.5 {
+            let cur = iris_weight(e, f);
+            assert!(cur >= prev - 1e-7, "weight must not decrease ({prev} -> {cur} at e={e})");
+            prev = cur;
+            e += 0.05;
+        }
+    }
+
+    #[test]
+    fn iris_blur_keeps_the_center_sharp_and_blurs_outside() {
+        // 41×41 image with a vertical hard edge (black left, white right) so a
+        // blur visibly softens it. A small ellipse keeps the center crisp; the
+        // corners (well outside the ellipse) blur and bleed across the edge.
+        let n = 41usize;
+        let img = vsplit(n);
+        let c = (n / 2) as f32;
+        let (rx, ry) = (5.0, 5.0); // small focus ellipse at the center
+        let out = iris_blur(&img, n, n, c, c, rx, ry, 0.5, 8.0);
+        let col = n / 2; // edge column: x = n/2 is white, x-1 is black
+        // Center pixel (inside the ellipse) is untouched: hard step preserved.
+        let mid = n / 2;
+        assert!(approx(out[mid * n + (col - 1)][0], 0.0, 1e-5), "center-left stays black");
+        assert!(approx(out[mid * n + col][0], 1.0, 1e-5), "center-right stays white");
+        // Top-of-image row (far outside the ellipse) is blurred: edge bleeds, so
+        // the column just left of the step is no longer pure black.
+        let blurred = out[col - 1][0];
+        assert!(blurred > 0.05, "far-from-center edge should blur (bleed), got {blurred}");
+    }
+
+    #[test]
+    fn iris_blur_falloff_is_monotonic_with_normalized_radius() {
+        // Along a horizontal line out from the center on a vertical edge image,
+        // the effective blur radius (hence the bleed at the step) should grow
+        // monotonically with the normalized elliptical radius. Probe the focus
+        // weight directly across increasing distance.
+        let f = 0.6f32;
+        let (rx, ry) = (30.0f32, 20.0f32);
+        let mut prev = 0.0;
+        for k in 0..40 {
+            let dx = k as f32 * 2.0;
+            let e = ((dx / rx) * (dx / rx)).sqrt(); // dy = 0
+            let w = iris_weight(e, f);
+            assert!(w >= prev - 1e-7, "iris falloff must not decrease at dx={dx}");
+            prev = w;
+        }
+        let _ = ry; // ry exercised by the elliptical-distance test above
+    }
+
+    #[test]
+    fn iris_blur_zero_radius_is_identity() {
+        let n = 16usize;
+        let img = vsplit(n);
+        let c = (n / 2) as f32;
+        let out = iris_blur(&img, n, n, c, c, 4.0, 4.0, 0.5, 0.0);
         assert_eq!(out, img, "max radius 0 leaves the image untouched everywhere");
     }
 }

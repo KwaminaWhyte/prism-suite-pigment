@@ -838,6 +838,51 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Iris Blur (Blur Gallery, kind 31) on the active layer: the radial sibling
+    /// of Tilt-Shift. The image stays sharp inside an elliptical region centred at
+    /// `(cx, cy)` (pixel coords) with pixel radii `(rx, ry)`, and blurs
+    /// progressively up to `max_radius` px outside it. `feather` is a normalized
+    /// fraction of the ellipse radius (how far past the boundary the blur ramps to
+    /// full). Single pass; destructive + undoable (region-COW).
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_iris_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        cx: f32,
+        cy: f32,
+        rx: f32,
+        ry: f32,
+        feather: f32,
+        max_radius: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Iris Blur");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        // `dir` carries the ellipse radii (px), `center` the center (uv),
+        // `amount` the feather (normalized), `radius` the max blur (px).
+        let center = [
+            cx / self.canvas_size.width as f32,
+            cy / self.canvas_size.height as f32,
+        ];
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            31,
+            [rx.max(0.0), ry.max(0.0)],
+            feather.max(0.0),
+            max_radius.max(0.0),
+            center,
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.
     pub fn composite_now(
         &mut self,

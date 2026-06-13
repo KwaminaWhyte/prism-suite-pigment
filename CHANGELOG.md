@@ -6,6 +6,35 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+### Added
+- **Filter · Blur · Iris Blur** (Blur Gallery — radial focus blur). The radial
+  sibling of Tilt-Shift: a new destructive, undoable entry in the **Filter ▸
+  Blur** submenu that keeps the image sharp inside an **elliptical** region at the
+  canvas center and blurs progressively outside it (the classic Iris/lens focus
+  look). Controls: **ellipse width / height** (px radii), **feather** (a
+  normalized fraction of the ellipse radius — how far past the boundary the blur
+  ramps to full), and **max blur** (px). The GPU pass (filter shader **kind 31**)
+  computes a per-pixel focus weight from the normalized elliptical radius
+  `e = sqrt((dx/rx)² + (dy/ry)²)` — `0` inside the ellipse (`e ≤ 1`), ramping
+  smoothly to `1` once past the boundary by `feather` — and runs a local 2D
+  Gaussian whose radius is `max blur × weight`, so inside-ellipse pixels are
+  untouched. Mirrors the Tilt-Shift variable-radius blur with a radial mask
+  instead of a band. The focus-weight falloff (`iris_weight`) and the full
+  `iris_blur` are pure, testable CPU references bit-for-bit matching the shader.
+  Tested: the weight is `0` inside the ellipse, `1` at full feather, monotonic in
+  normalized radius; the center stays sharp while corners blur/bleed; zero max
+  blur is identity (4 unit tests) + 1 GPU pixel test (skip-on-no-adapter).
+  App-local (no shared-crate change).
+- **Filter · Blur · Spin Blur** (Blur Gallery — rotational motion blur). A new
+  entry in the **Filter ▸ Blur** submenu that smears the active layer along the
+  tangential arc about the canvas center, the amount set by a **blur angle**
+  (0–90°) with a **quality (samples)** control. Reuses the existing radial-blur
+  **Spin** mode (filter shader **kind 6**, samples spread symmetrically so a flat
+  image is unchanged) under a clean Blur Gallery name. Tested: rotational blur of
+  a flat (constant) image is the identity, and an off-center bright pixel smears
+  tangentially (not radially) — 1 GPU pixel test (skip-on-no-adapter), atop the
+  existing radial-spin kernel unit tests. App-local (no shared-crate change).
+
 ## [0.5.0] - 2026-06-13
 
 ### Added

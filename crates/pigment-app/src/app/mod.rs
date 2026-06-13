@@ -298,6 +298,14 @@ pub struct PigmentApp {
     tilt_feather: f32,   // blur ramp width past the band (px)
     tilt_radius: f32,    // max blur radius (px)
     tilt_angle: f32,     // band tilt (degrees)
+    // Iris Blur (Blur Gallery): sharp inside an ellipse, blur outside.
+    iris_rx: f32,      // ellipse x radius (px)
+    iris_ry: f32,      // ellipse y radius (px)
+    iris_feather: f32, // feather (normalized fraction of the ellipse radius)
+    iris_radius: f32,  // max blur radius (px)
+    // Spin Blur (Blur Gallery): rotational motion blur about the canvas center.
+    spin_angle: f32,   // blur angle (degrees)
+    spin_samples: u32, // tap count (quality)
     // Distort family (Phase 8).
     twirl_angle: f32,       // degrees
     twirl_radius: f32,      // pixels
@@ -580,6 +588,12 @@ impl PigmentApp {
             tilt_feather: 120.0,
             tilt_radius: 12.0,
             tilt_angle: 0.0,
+            iris_rx: 200.0,
+            iris_ry: 150.0,
+            iris_feather: 0.5,
+            iris_radius: 14.0,
+            spin_angle: 15.0,
+            spin_samples: 24,
             twirl_angle: 90.0,
             twirl_radius: 200.0,
             pinch_amount: 0.5,

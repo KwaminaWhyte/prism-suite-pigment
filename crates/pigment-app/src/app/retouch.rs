@@ -584,6 +584,48 @@ impl PigmentApp {
         self.force_composite = true;
     }
 
+    /// Iris Blur (Blur Gallery) the active layer: the radial sibling of
+    /// Tilt-Shift. The image stays sharp inside an elliptical region centred at
+    /// the canvas center, with pixel radii `(rx, ry)`, and blurs progressively up
+    /// to `max_radius` px outside it. `feather` is a normalized fraction of the
+    /// ellipse radius (how far past the boundary the blur ramps to full).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn do_iris_blur(
+        &mut self,
+        frame: &mut eframe::Frame,
+        rx: f32,
+        ry: f32,
+        feather: f32,
+        max_radius: f32,
+    ) {
+        let active = self.active_id();
+        let cx = self.doc.size.width as f32 * 0.5;
+        let cy = self.doc.size.height as f32 * 0.5;
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_iris_blur(d, q, active, cx, cy, rx, ry, feather, max_radius)
+        });
+        self.force_composite = true;
+    }
+
+    /// Spin Blur (Blur Gallery) the active layer: rotational motion blur about
+    /// the canvas center over `angle_deg`, sampled along the tangential arc with
+    /// `samples` taps. Reuses the radial-blur Spin mode under a Blur Gallery name.
+    pub(crate) fn do_spin_blur(
+        &mut self,
+        frame: &mut eframe::Frame,
+        angle_deg: f32,
+        samples: u32,
+    ) {
+        let active = self.active_id();
+        let cx = self.doc.size.width as f32 * 0.5;
+        let cy = self.doc.size.height as f32 * 0.5;
+        let amt = angle_deg.to_radians();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_radial_blur(d, q, active, cx, cy, true, amt, samples)
+        });
+        self.force_composite = true;
+    }
+
     /// Twirl the active layer about its center: rotate by up to `angle_deg`,
     /// falling off to 0 at `radius` pixels.
     pub(crate) fn do_twirl(&mut self, frame: &mut eframe::Frame, angle_deg: f32, radius: f32) {
