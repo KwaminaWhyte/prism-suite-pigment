@@ -6,6 +6,8 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-13
+
 ### Added
 - **Edit · Pattern fill** (define a pattern from a selection, then tile-fill).
   Two new **Edit** menu entries: **Define Pattern** captures the active layer's
