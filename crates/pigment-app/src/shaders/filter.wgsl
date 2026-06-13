@@ -12,7 +12,8 @@ struct FParams {
     // 25 clouds (fBm value-noise generator), 26 difference clouds
     // (|source - clouds|), 27 oil paint (Kuwahara quadrant filter),
     // 28 posterize (quantize each channel to N display-space levels),
-    // 29 threshold (luma cutoff → pure black/white).
+    // 29 threshold (luma cutoff → pure black/white),
+    // 30 tilt-shift (graduated focus blur: sharp band, blur falls off outside).
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -126,6 +127,20 @@ fn fbm(px: vec2<f32>, seed: f32, scale: f32, roughness: f32, octaves: i32) -> f3
         amp = amp * roughness;
     }
     return sum / max(norm, 1e-5);
+}
+
+// Tilt-shift focus weight in [0,1] for a point `dist` (pixels) from the focus
+// line, given a sharp band half-width `half_band` and a `feather` ramp (both in
+// pixels). Returns 0 inside the band (fully sharp) and ramps smoothly to 1 once
+// past `half_band + feather` (fully blurred). Used to scale the per-pixel blur
+// radius; kept as a standalone `fn` so the CPU reference can match it exactly.
+fn focus_weight(dist: f32, half_band: f32, feather: f32) -> f32 {
+    let d = abs(dist);
+    if d <= half_band {
+        return 0.0;
+    }
+    let f = max(feather, 1e-3);
+    return clamp((d - half_band) / f, 0.0, 1.0);
 }
 
 @fragment
@@ -640,6 +655,49 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let luma = dot(l2s(src.rgb / a), lw);
         let v = select(0.0, 1.0, luma >= p.amount);
         return vec4<f32>(vec3<f32>(v) * src.a, src.a);
+    } else if p.kind == 30u {
+        // ---- Tilt-Shift (kind 30): a graduated/positional blur. The image
+        // stays sharp inside a focus band and blurs progressively outside it.
+        // `center.y` is the focus line position in uv (0..1); `dir` = (cos, sin)
+        // of the band's *normal* (so the band can be tilted); `amount` is the
+        // band half-width in pixels and `radius` the max blur radius in pixels.
+        // The feather ramp is packed alongside the half-width — we recover it
+        // from `texel`/uniforms below. Per pixel we compute the signed distance
+        // to the focus line along the band normal, turn it into a focus weight in
+        // [0,1] (0 = sharp, 1 = fully blurred), scale the Gaussian tap radius by
+        // it and run a single 2D Gaussian over that local radius. Inside the band
+        // the radius is 0, so the pixel is returned untouched.
+        let dim = 1.0 / p.texel;                 // (w, h) in px
+        let px = in.uv * dim;                    // this pixel in px
+        let cline = p.center.y * dim.y;          // focus line in px (y)
+        // Band normal (unit); default vertical band → normal = (0, 1).
+        let nrm = vec2<f32>(p.dir.x, p.dir.y);
+        // Signed distance from the focus line along the normal, in px. The line
+        // passes through y = cline at the canvas centre x; project the offset.
+        let off = px - vec2<f32>(dim.x * 0.5, cline);
+        let dist = dot(off, nrm);
+        let half_band = p.amount;
+        let feather = p.center.x;                // feather (px) packed in center.x
+        let wgt = focus_weight(dist, half_band, feather);
+        let rad = p.radius * wgt;
+        let r = i32(clamp(rad, 0.0, 64.0));
+        if r <= 0 {
+            return textureSample(input, samp, in.uv);
+        }
+        let sigma = max(rad * 0.5, 0.5);
+        var sum = vec4<f32>(0.0);
+        var wsum = 0.0;
+        for (var j = -r; j <= r; j = j + 1) {
+            for (var i = -r; i <= r; i = i + 1) {
+                let w = exp(-0.5 * f32(i * i + j * j) / (sigma * sigma));
+                sum = sum + textureSample(
+                    input, samp,
+                    in.uv + vec2<f32>(f32(i), f32(j)) * p.texel,
+                ) * w;
+                wsum = wsum + w;
+            }
+        }
+        return sum / max(wsum, 1e-5);
     } else if p.kind == 16u {
         // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
         // swap. Replace each pixel with one of its neighbours within `amount`

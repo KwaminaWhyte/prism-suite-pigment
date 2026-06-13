@@ -796,6 +796,48 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Tilt-Shift (Blur Gallery, kind 30) on the active layer: a graduated focus
+    /// blur. The image stays sharp inside a horizontal focus band centred on
+    /// `center_y` (uv 0..1) of `half_band` px half-width, and blurs progressively
+    /// up to `max_radius` px once past `half_band + feather` (px). `angle_rad`
+    /// tilts the band (0 = horizontal band, normal pointing down). Single pass;
+    /// destructive + undoable (region-COW).
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_tilt_shift(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        center_y: f32,
+        half_band: f32,
+        feather: f32,
+        max_radius: f32,
+        angle_rad: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Tilt-Shift");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        // Band normal: angle 0 → (0, 1) (horizontal band). `center.x` carries the
+        // feather (px), `center.y` the focus line (uv).
+        let nrm = [-angle_rad.sin(), angle_rad.cos()];
+        let center = [feather, center_y.clamp(0.0, 1.0)];
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            30,
+            nrm,
+            half_band.max(0.0),
+            max_radius.max(0.0),
+            center,
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Composite all layers now (own encoder) and return whether the result is in `ping`.
     pub fn composite_now(
         &mut self,

@@ -6,6 +6,26 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+### Added
+- **Filter · Blur · Tilt-Shift** (Blur Gallery — graduated/positional blur). A
+  new destructive, undoable entry in the **Filter ▸ Blur** submenu that keeps the
+  image sharp inside a horizontal **focus band** and blurs progressively outside
+  it, the classic miniature-faking / tilt-shift look. Controls: **focus center**
+  (0–1 of canvas height), **band half-width** (px, fully sharp), **feather** (px,
+  the ramp past the band), **max blur** (px), and a **tilt angle** (±45°) to lean
+  the band. The GPU pass (filter shader **kind 30**) computes a per-pixel focus
+  weight from the signed distance to the (optionally tilted) focus line — `0`
+  inside the band, ramping smoothly to `1` once past `half-width + feather` — and
+  runs a local 2D Gaussian whose radius is `max blur × weight`, so in-band pixels
+  are returned untouched and out-of-band pixels blur more the further they sit
+  from the band. Reuses the existing destructive `begin_command → filter pass →
+  copy-back` (region-COW undo) pattern. Tested: a pure CPU reference of the
+  focus-weight falloff (zero in the band, symmetric, monotonic, clamped to 1 past
+  the feather) and of the full tilt-shift (in-band stays a hard edge, far-from-
+  band blurs, max-radius 0 is identity), plus a GPU pixel test (skip-on-no-
+  adapter) confirming the band stays sharp while a far row blurs. App-local (no
+  shared-crate change).
+
 ## [0.4.0] - 2026-06-13
 
 ### Added

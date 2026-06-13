@@ -292,6 +292,12 @@ pub struct PigmentApp {
     radial_amount: f32, // spin: degrees; zoom: percent
     radial_samples: u32,
     radial_spin: bool, // true = spin, false = zoom
+    // Tilt-Shift (Blur Gallery).
+    tilt_center: f32,    // focus line position (0..1 of canvas height)
+    tilt_half_band: f32, // sharp band half-width (px)
+    tilt_feather: f32,   // blur ramp width past the band (px)
+    tilt_radius: f32,    // max blur radius (px)
+    tilt_angle: f32,     // band tilt (degrees)
     // Distort family (Phase 8).
     twirl_angle: f32,       // degrees
     twirl_radius: f32,      // pixels
@@ -557,6 +563,11 @@ impl PigmentApp {
             radial_amount: 15.0,
             radial_samples: 24,
             radial_spin: true,
+            tilt_center: 0.5,
+            tilt_half_band: 60.0,
+            tilt_feather: 120.0,
+            tilt_radius: 12.0,
+            tilt_angle: 0.0,
             twirl_angle: 90.0,
             twirl_radius: 200.0,
             pinch_amount: 0.5,

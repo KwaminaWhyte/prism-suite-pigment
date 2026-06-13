@@ -562,6 +562,28 @@ impl PigmentApp {
         self.force_composite = true;
     }
 
+    /// Tilt-Shift (Blur Gallery) the active layer: a graduated focus blur. The
+    /// image stays sharp in a focus band centred at `center_frac` (0..1 of the
+    /// canvas height) of `half_band` px half-width, blurring up to `max_radius`
+    /// px past `half_band + feather`. `angle_deg` tilts the band.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn do_tilt_shift(
+        &mut self,
+        frame: &mut eframe::Frame,
+        center_frac: f32,
+        half_band: f32,
+        feather: f32,
+        max_radius: f32,
+        angle_deg: f32,
+    ) {
+        let active = self.active_id();
+        let angle = angle_deg.to_radians();
+        with_gpu(frame, |gpu, d, q| {
+            gpu.apply_tilt_shift(d, q, active, center_frac, half_band, feather, max_radius, angle)
+        });
+        self.force_composite = true;
+    }
+
     /// Twirl the active layer about its center: rotate by up to `angle_deg`,
     /// falling off to 0 at `radius` pixels.
     pub(crate) fn do_twirl(&mut self, frame: &mut eframe::Frame, angle_deg: f32, radius: f32) {

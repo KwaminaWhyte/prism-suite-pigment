@@ -2948,3 +2948,49 @@ fn smart_filter_edit_reapplies_from_pristine_source() {
         );
     }
 }
+
+// Tilt-Shift (Blur Gallery, kind 30): a vertical hard edge runs the full canvas
+// height; a horizontal focus band sits on the middle rows. Inside the band the
+// edge stays a hard step; far above the band the edge is blurred (bleeds), so
+// the column just left of the step is no longer pure black. Skips if no adapter.
+#[test]
+fn tilt_shift_band_sharp_outside_blurred() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping tilt_shift_band_sharp_outside_blurred");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 32u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    // Black left half, white right half (hard vertical edge at x = n/2).
+    gpu.upload_layer(
+        &queue,
+        l0,
+        &layer_from(n, |x, _y| {
+            if x < n / 2 {
+                [0.0, 0.0, 0.0, 1.0]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            }
+        }),
+    );
+    // Focus band centred on the middle row, narrow band + feather, strong blur.
+    let center = 0.5; // uv (mid height)
+    gpu.apply_tilt_shift(&device, &queue, l0, center, 3.0, 4.0, 8.0, 0.0);
+
+    let col = n / 2; // x just right of the step is white, x-1 is black
+    // In-band row: the edge is untouched (still a hard black→white step).
+    let mid = n / 2;
+    let in_l = gpu.read_pixel(&device, &queue, l0, col - 1, mid).unwrap()[0];
+    let in_r = gpu.read_pixel(&device, &queue, l0, col, mid).unwrap()[0];
+    assert!(in_l < 0.05, "in-band left of edge stays black: {in_l}");
+    assert!(in_r > 0.95, "in-band right of edge stays white: {in_r}");
+    // Far-from-band row (top): the edge is blurred, so the black side bleeds up.
+    let far_l = gpu.read_pixel(&device, &queue, l0, col - 1, 0).unwrap()[0];
+    assert!(
+        far_l > 0.05,
+        "far-from-band edge should blur (bleed), got {far_l}"
+    );
+}

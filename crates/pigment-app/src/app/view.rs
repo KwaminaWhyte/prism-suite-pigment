@@ -312,6 +312,40 @@ impl eframe::App for PigmentApp {
                             );
                             ui.close_menu();
                         }
+                        ui.separator();
+                        // Tilt-Shift (Blur Gallery): graduated focus blur — sharp
+                        // band, blur falls off above/below it.
+                        ui.add(
+                            egui::Slider::new(&mut self.tilt_center, 0.0..=1.0)
+                                .text("focus center"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.tilt_half_band, 0.0..=400.0)
+                                .text("band half-width"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.tilt_feather, 1.0..=600.0)
+                                .text("feather"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.tilt_radius, 0.0..=40.0)
+                                .text("max blur"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.tilt_angle, -45.0..=45.0)
+                                .text("tilt angle°"),
+                        );
+                        if ui.button("Tilt-Shift").clicked() {
+                            self.do_tilt_shift(
+                                frame,
+                                self.tilt_center,
+                                self.tilt_half_band,
+                                self.tilt_feather,
+                                self.tilt_radius,
+                                self.tilt_angle,
+                            );
+                            ui.close_menu();
+                        }
                     });
                     ui.menu_button("Distort", |ui| {
                         // Twirl (angle + radius about the canvas center).
