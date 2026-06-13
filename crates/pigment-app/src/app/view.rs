@@ -55,6 +55,11 @@ impl eframe::App for PigmentApp {
             self.do_gradient(frame, p0, p1);
         }
 
+        // A "fill with pattern" request from the Edit menu.
+        if std::mem::take(&mut self.pat_fill_pending) {
+            self.do_pattern_fill(frame);
+        }
+
         // Dynamic-Link: poll linked `.contour` sources every frame. When a link
         // exists, keep the UI repainting (egui idles otherwise) so the mtime
         // poll actually runs and the layer tracks its vector source live.
@@ -130,6 +135,41 @@ impl eframe::App for PigmentApp {
                         self.layer_from_selection(frame);
                         ui.close_menu();
                     }
+                    ui.separator();
+                    if ui.button("Define Pattern").clicked() {
+                        self.define_pattern(frame);
+                        ui.close_menu();
+                    }
+                    ui.menu_button("Fill with Pattern", |ui| {
+                        if let Some(p) = &self.pattern {
+                            ui.label(format!("pattern: {}×{}", p.w, p.h));
+                        } else {
+                            ui.label("no pattern — use Define Pattern");
+                        }
+                        ui.add(
+                            egui::Slider::new(&mut self.pattern_scale, 0.05..=8.0)
+                                .text("scale")
+                                .logarithmic(true),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.pattern_offset.0, -512.0..=512.0)
+                                .text("offset x"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.pattern_offset.1, -512.0..=512.0)
+                                .text("offset y"),
+                        );
+                        if ui
+                            .add_enabled(
+                                self.pattern.is_some(),
+                                egui::Button::new("Fill"),
+                            )
+                            .clicked()
+                        {
+                            self.pat_fill_pending = true;
+                            ui.close_menu();
+                        }
+                    });
                 });
                 ui.menu_button("Image", |ui| {
                     ui.horizontal(|ui| {

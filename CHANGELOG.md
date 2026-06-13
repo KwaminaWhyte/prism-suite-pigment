@@ -7,6 +7,25 @@ this project is pre-1.0, so versions are `0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Edit · Pattern fill** (define a pattern from a selection, then tile-fill).
+  Two new **Edit** menu entries: **Define Pattern** captures the active layer's
+  pixels inside the current selection's bounding box (or the *whole layer* when
+  there's no selection) as an in-memory **tile** — a soft/partial selection
+  premultiplies the captured tile by its coverage; **Fill with Pattern** tiles
+  that pattern across the active layer (clipped to the selection when one
+  exists), source-over the existing pixels, with **scale** (0.05–8×, log slider)
+  and **offset x/y** (doc px) controls. The fill reuses the destructive
+  `begin_command → read layer → blend → upload` path (region-COW undo) shared
+  with the gradient fill, working in linear premultiplied RGBA. The pattern tile
+  is **session-scoped** (not persisted to `.pigment` — re-define after a reload).
+  The tiling/coverage math is a pure, testable function (`pattern_texel`: dest
+  pixel → pattern texel via scale + offset + Euclidean wrap) plus a pure
+  `tile_fill` that blends the tiled pattern over a buffer. Tested: the texel map
+  wraps beyond the tile size, applies offset and scale, and is total for a
+  degenerate (zero) tile; a 2×2 checker tile reproduces the checker exactly over
+  a 4×4 fill; the selection mask gates the fill (outside-selection pixels
+  unchanged) and partial coverage blends proportionally. App-local (no
+  shared-crate change).
 - **Filter · Blur · Tilt-Shift** (Blur Gallery — graduated/positional blur). A
   new destructive, undoable entry in the **Filter ▸ Blur** submenu that keeps the
   image sharp inside a horizontal **focus band** and blurs progressively outside

@@ -358,6 +358,18 @@ pub struct PigmentApp {
     /// on the next frame so the GPU readback/upload runs with `frame` in hand.
     grad_fill_pending: Option<(egui::Vec2, egui::Vec2)>,
 
+    /// The current pattern tile (captured from a selection / whole layer via
+    /// **Edit ▸ Define Pattern**), used by **Fill with Pattern**. Session-scoped
+    /// (not persisted to `.pigment`).
+    pattern: Option<pattern::Pattern>,
+    /// Pattern-fill scale (the tile is drawn `scale×` its native size).
+    pattern_scale: f32,
+    /// Pattern-fill origin offset (doc px).
+    pattern_offset: (f32, f32),
+    /// A "fill with pattern" request, applied on the next frame so the GPU
+    /// readback/upload runs with `frame` in hand (mirrors `grad_fill_pending`).
+    pat_fill_pending: bool,
+
     // Dynamic-Link: layers placed from a `.contour` file with a live link. Each
     // frame we stat the source file; a newer mtime triggers a re-rasterize +
     // re-upload to the SAME layer id. (path, last-seen modified time.)
@@ -609,6 +621,10 @@ impl PigmentApp {
             grad_start: None,
             gradient: gradient::GradientEditor::default(),
             grad_fill_pending: None,
+            pattern: None,
+            pattern_scale: 1.0,
+            pattern_offset: (0.0, 0.0),
+            pat_fill_pending: false,
             linked_contours: HashMap::new(),
             font_families: Vec::new(),
             comps: Vec::new(),
@@ -623,6 +639,7 @@ mod comps;
 mod edit;
 mod gradient;
 mod io;
+mod pattern;
 mod retouch;
 mod smart_filter;
 mod state;
