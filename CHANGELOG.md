@@ -6,6 +6,8 @@ this project is pre-1.0, so versions are `0.x` milestones.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-13
+
 ### Added
 - **Smart Filters** (non-destructive, re-editable filter stack). A raster layer
   can now carry an ordered stack of **smart filters** that stay editable instead
