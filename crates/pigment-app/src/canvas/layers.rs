@@ -209,6 +209,7 @@ impl CanvasGpu {
         self.stroke_owner = None;
         self.stroke_pre = None;
         self.layers.clear(); // new document
+        self.smart_sources.clear();
         self.curve_luts.clear();
         self.clone_src = None;
         self.masks.clear();
@@ -225,6 +226,7 @@ impl CanvasGpu {
 
     pub fn drop_layer(&mut self, id: LayerId) {
         self.layers.remove(&id);
+        self.smart_sources.remove(&id);
         self.curve_luts.remove(&id);
     }
 
@@ -488,6 +490,20 @@ impl CanvasGpu {
         id: LayerId,
     ) -> Option<Vec<u8>> {
         let tex = &self.layers.get(&id)?.tex;
+        self.readback_texture(device, queue, tex)
+    }
+
+    /// Read a layer's **smart-filter source** (un-filtered) pixels back to CPU as
+    /// tightly-packed RGBA16F, if it has a source snapshot. Used at save time so a
+    /// layer with smart filters persists its editable source — the filters are
+    /// re-applied on load — rather than the baked, filtered display pixels.
+    pub fn read_smart_source(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+    ) -> Option<Vec<u8>> {
+        let tex = &self.smart_sources.get(&id)?.tex;
         self.readback_texture(device, queue, tex)
     }
 

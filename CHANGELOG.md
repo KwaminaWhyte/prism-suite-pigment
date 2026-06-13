@@ -7,6 +7,30 @@ this project is pre-1.0, so versions are `0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Smart Filters** (non-destructive, re-editable filter stack). A raster layer
+  can now carry an ordered stack of **smart filters** that stay editable instead
+  of being baked: the layer keeps its un-filtered **source** pixels, and the
+  displayed/composited result is the source with the *enabled* filters applied in
+  order, re-applied from the source whenever the stack changes. A **Smart
+  Filters** section in the Properties panel lets you **add** (Gaussian Blur /
+  Sharpen / Posterize), **remove**, **toggle**, **re-order** (apply earlier /
+  later), and **edit the parameters** of each filter live — toggling a filter off
+  or removing the last one restores the original pixels exactly. The pixel math
+  **reuses the existing GPU filter passes** (the same shader kinds the destructive
+  Filter menu uses — separable blur runs H then V), driven by a tidy GPU re-apply
+  that resets the layer to a one-time source snapshot and runs the enabled passes
+  into it (no source is ever overwritten, so edits always start from pristine
+  pixels). The stack persists in the `.pigment` document (additive
+  `LayerMeta.smart_filters` entries — `kind` + params + `enabled`; old documents
+  with no stack load unchanged), saving each smart-filtered layer's **source**
+  pixels so the filters re-apply cleanly on load. Tested: a pure model test suite
+  (add/remove/reorder/toggle ordering, enabled-pass extraction, serde round-trip
+  incl. legacy no-stack) plus GPU pixel tests (skip-on-no-adapter) — a smart
+  Gaussian blur softens a hard edge, disabling it restores the hard edge, and
+  editing a filter re-applies from the pristine source. The serialized stack
+  lives in the shared `prism-io::document_file` (additive, byte-compatible — all
+  four suite apps still build); the model, GPU re-apply, and UI are app-local.
+  **Per-filter masks** are a documented follow-up.
 - **Filter · Adjustments · Posterize / Threshold** (destructive tonal ops). The
   Filter menu gains an **Adjustments** submenu with two destructive, undoable
   bake-into-the-layer operations (the counterpart to the existing non-destructive

@@ -17,12 +17,24 @@ impl eframe::App for PigmentApp {
             // edit operations use) and build the display bind group from it, so
             // the document is presented on the very first frame.
             let order = self.layer_order();
+            // Uploaded layers that carry a non-destructive smart-filter stack must
+            // have it re-applied: the saved pixels are the *source* (un-filtered),
+            // and the stack regenerates the displayed result on top of them.
+            let smart: Vec<(LayerId, Vec<super::smart_filter::SmartPass>)> = self
+                .smart_filters
+                .iter()
+                .filter(|(_, s)| !s.is_empty())
+                .map(|(id, s)| (*id, s.enabled_passes()))
+                .collect();
             let uploaded = with_gpu(frame, |gpu, device, queue| {
                 let pend = self.pending.as_ref().expect("pending checked above");
                 gpu.ensure_canvas(device, pend.size);
                 for (id, bytes) in &pend.layers {
                     gpu.ensure_layer(device, *id);
                     gpu.upload_layer(queue, *id, bytes);
+                }
+                for (id, passes) in &smart {
+                    gpu.reapply_smart_filters(device, queue, *id, passes);
                 }
                 let final_is_ping = gpu.composite_now(device, queue, &order);
                 gpu.build_display_bind_group(device, final_is_ping);
@@ -1381,6 +1393,140 @@ impl eframe::App for PigmentApp {
                                     self.comps.remove(i);
                                 }
                             });
+
+                            // ---- Smart Filters (non-destructive filter stack) ----
+                            // Operates on the active layer; only raster layers can
+                            // carry pixels to filter. Each edit is deferred into a
+                            // `SmartFilterUi` action and dispatched after the panel
+                            // section so the mutators (which take `&mut self` +
+                            // `frame` and re-apply the stack on the GPU) don't
+                            // conflict with the borrows used to draw the list.
+                            {
+                                use super::smart_filter::{SmartFilterKind as SfK, SmartFilterUi};
+                                let active = self.active_id();
+                                let is_raster = matches!(
+                                    self.doc.layers.get(active).map(|l| &l.kind),
+                                    Some(LayerKind::Raster)
+                                );
+                                let mut sf_action = SmartFilterUi::None;
+                                egui::CollapsingHeader::new("Smart Filters")
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        if !is_raster {
+                                            ui.label("Select a raster layer.");
+                                            return;
+                                        }
+                                        ui.menu_button("Add filter", |ui| {
+                                            if ui.button("Gaussian Blur").clicked() {
+                                                sf_action = SmartFilterUi::Add(
+                                                    SfK::GaussianBlur { radius: 4.0 },
+                                                );
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Sharpen").clicked() {
+                                                sf_action =
+                                                    SmartFilterUi::Add(SfK::Sharpen { amount: 1.0 });
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Posterize").clicked() {
+                                                sf_action = SmartFilterUi::Add(
+                                                    SfK::Posterize { levels: 6 },
+                                                );
+                                                ui.close_menu();
+                                            }
+                                        });
+                                        let stack = self.smart_stack(active);
+                                        if stack.is_empty() {
+                                            ui.weak("No smart filters on this layer.");
+                                        }
+                                        for (i, f) in stack.filters.iter().enumerate() {
+                                            ui.separator();
+                                            ui.horizontal(|ui| {
+                                                let mut on = f.enabled;
+                                                if ui.checkbox(&mut on, "").changed() {
+                                                    sf_action = SmartFilterUi::Toggle(i);
+                                                }
+                                                ui.label(f.kind.label());
+                                                if ui
+                                                    .small_button(crate::icons::ARROW_UP)
+                                                    .on_hover_text("Apply earlier")
+                                                    .clicked()
+                                                {
+                                                    sf_action = SmartFilterUi::Up(i);
+                                                }
+                                                if ui
+                                                    .small_button(crate::icons::ARROW_DOWN)
+                                                    .on_hover_text("Apply later")
+                                                    .clicked()
+                                                {
+                                                    sf_action = SmartFilterUi::Down(i);
+                                                }
+                                                if ui
+                                                    .small_button(crate::icons::TRASH)
+                                                    .on_hover_text("Remove")
+                                                    .clicked()
+                                                {
+                                                    sf_action = SmartFilterUi::Remove(i);
+                                                }
+                                            });
+                                            // Params editor — committed on release so
+                                            // dragging a slider doesn't re-run the whole
+                                            // stack every pixel of the drag.
+                                            match f.kind {
+                                                SfK::GaussianBlur { radius } => {
+                                                    let mut r = radius;
+                                                    let resp = ui.add(
+                                                        egui::Slider::new(&mut r, 0.0..=40.0)
+                                                            .text("radius"),
+                                                    );
+                                                    if resp.changed() || resp.drag_stopped() {
+                                                        sf_action = SmartFilterUi::Edit(
+                                                            i,
+                                                            SfK::GaussianBlur { radius: r },
+                                                        );
+                                                    }
+                                                }
+                                                SfK::Sharpen { amount } => {
+                                                    let mut a = amount;
+                                                    let resp = ui.add(
+                                                        egui::Slider::new(&mut a, 0.0..=4.0)
+                                                            .text("amount"),
+                                                    );
+                                                    if resp.changed() || resp.drag_stopped() {
+                                                        sf_action = SmartFilterUi::Edit(
+                                                            i,
+                                                            SfK::Sharpen { amount: a },
+                                                        );
+                                                    }
+                                                }
+                                                SfK::Posterize { levels } => {
+                                                    let mut l = levels as f32;
+                                                    let resp = ui.add(
+                                                        egui::Slider::new(&mut l, 2.0..=32.0)
+                                                            .text("levels"),
+                                                    );
+                                                    if resp.changed() || resp.drag_stopped() {
+                                                        sf_action = SmartFilterUi::Edit(
+                                                            i,
+                                                            SfK::Posterize {
+                                                                levels: l.round() as u32,
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                match sf_action {
+                                    SmartFilterUi::None => {}
+                                    SmartFilterUi::Add(k) => self.add_smart_filter(frame, k),
+                                    SmartFilterUi::Remove(i) => self.remove_smart_filter(frame, i),
+                                    SmartFilterUi::Toggle(i) => self.toggle_smart_filter(frame, i),
+                                    SmartFilterUi::Up(i) => self.move_smart_filter_up(frame, i),
+                                    SmartFilterUi::Down(i) => self.move_smart_filter_down(frame, i),
+                                    SmartFilterUi::Edit(i, k) => self.edit_smart_filter(frame, i, k),
+                                }
+                            }
 
                             ui.separator();
                             ui.horizontal(|ui| {

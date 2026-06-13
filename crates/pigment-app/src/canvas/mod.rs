@@ -424,6 +424,13 @@ pub struct CanvasGpu {
 
     // Document state mirror.
     layers: HashMap<LayerId, GpuLayer>,
+    /// Per-layer **smart-filter source** textures: the un-filtered pixels a layer
+    /// had when its smart-filter stack was created. The displayed `layers[id]`
+    /// texture is this source with the layer's enabled smart filters re-applied
+    /// in order (see `reapply_smart_filters`), so the stack stays non-destructive
+    /// — toggling/removing a filter restores the source. Present only while a
+    /// layer carries a non-empty smart-filter stack.
+    smart_sources: HashMap<LayerId, GpuLayer>,
     /// Per-Curves-layer 256×1 LUT textures (rgba = r/g/b/master tone curves).
     curve_luts: HashMap<LayerId, GpuLayer>,
     /// Identity LUT bound to composite passes that have no Curves layer (the
@@ -799,6 +806,7 @@ impl CanvasGpu {
             display_uniform,
             display_bind_group: None,
             layers: HashMap::new(),
+            smart_sources: HashMap::new(),
             curve_luts: HashMap::new(),
             identity_lut: None,
             canvas_size: Size::new(1, 1),

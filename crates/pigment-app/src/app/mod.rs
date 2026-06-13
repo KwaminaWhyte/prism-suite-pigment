@@ -370,6 +370,13 @@ pub struct PigmentApp {
     comps: Vec<comps::LayerComp>,
     /// Scratch buffer for the "new comp" name field in the Layers panel.
     new_comp_name: String,
+
+    /// Per-layer **smart-filter stacks** (non-destructive, re-editable filters
+    /// applied on top of each layer's stored source pixels), keyed by the stable
+    /// [`LayerId`]. Absent / empty for layers with no smart filters. Persisted in
+    /// the `.pigment` document; see the `smart_filter` module for the pure model
+    /// and `canvas::CanvasGpu::reapply_smart_filters` for the GPU re-apply.
+    smart_filters: std::collections::HashMap<LayerId, smart_filter::SmartFilterStack>,
 }
 
 /// Whether the active layer's live affine must be sent to the GPU this frame.
@@ -595,6 +602,7 @@ impl PigmentApp {
             font_families: Vec::new(),
             comps: Vec::new(),
             new_comp_name: String::new(),
+            smart_filters: HashMap::new(),
         }
     }
 }
@@ -605,6 +613,7 @@ mod edit;
 mod gradient;
 mod io;
 mod retouch;
+mod smart_filter;
 mod state;
 mod view;
 

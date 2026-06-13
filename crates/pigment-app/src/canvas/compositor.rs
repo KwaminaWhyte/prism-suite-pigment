@@ -170,6 +170,96 @@ impl CanvasGpu {
         }
     }
 
+    /// Capture the layer's current pixels as its **smart-filter source** (the
+    /// un-filtered baseline the stack re-applies from). Idempotent: if a source
+    /// already exists for `id` it is left untouched, so re-applying an edited
+    /// stack never re-snapshots an already-filtered result. Call this once, when
+    /// the layer's first smart filter is added.
+    pub fn ensure_smart_source(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: LayerId) {
+        if self.smart_sources.contains_key(&id) {
+            return;
+        }
+        let Some(layer) = self.layers.get(&id) else {
+            return;
+        };
+        let src = make_target(device, self.canvas_size, "smart.source");
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &layer.tex, &src.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+        self.smart_sources.insert(id, src);
+    }
+
+    /// Whether layer `id` currently holds a smart-filter source snapshot.
+    pub fn has_smart_source(&self, id: LayerId) -> bool {
+        self.smart_sources.contains_key(&id)
+    }
+
+    /// Restore the layer's pixels from its smart-filter source and drop the
+    /// source. Used when the last smart filter is removed (the layer goes back to
+    /// being plain, editable pixels — the source becomes the live layer again).
+    pub fn clear_smart_source(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+    ) {
+        let (Some(src), Some(layer)) = (self.smart_sources.get(&id), self.layers.get(&id)) else {
+            self.smart_sources.remove(&id);
+            return;
+        };
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &src.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+        self.smart_sources.remove(&id);
+    }
+
+    /// Re-apply a layer's **non-destructive smart-filter stack**: reset the layer
+    /// to its source pixels, then run each `(kind, radius, amount)` pass over it
+    /// in order. The source is snapshotted on the first call (see
+    /// [`Self::ensure_smart_source`]) and never overwritten, so this is fully
+    /// reversible — passing an empty `passes` (all filters disabled) leaves the
+    /// layer equal to the source. Reuses the same GPU filter passes the
+    /// destructive Filter menu uses (separable blur runs H then V); no undo
+    /// snapshot is taken (the stack itself, held app-side, is the edit history).
+    pub fn reapply_smart_filters(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        passes: &[(u32, f32, f32)],
+    ) {
+        self.ensure_smart_source(device, queue, id);
+        let (Some(src), Some(layer), Some(pong)) = (
+            self.smart_sources.get(&id),
+            self.layers.get(&id),
+            self.pong.as_ref(),
+        ) else {
+            return;
+        };
+        // Start from the un-filtered source pixels.
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &src.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+        // Apply each enabled filter in order, in place on the layer texture.
+        let (txw, txh) = (
+            1.0 / self.canvas_size.width as f32,
+            1.0 / self.canvas_size.height as f32,
+        );
+        for &(kind, radius, amount) in passes {
+            if kind == 1 || kind == 5 {
+                // Separable blur: layer -> pong (H), pong -> layer (V).
+                self.filter_pass(device, queue, &layer.view, &pong.view, kind, [txw, 0.0], 0.0, radius);
+                self.filter_pass(device, queue, &pong.view, &layer.view, kind, [0.0, txh], 0.0, radius);
+            } else {
+                // Single pass: layer -> pong, then copy pong back into layer.
+                self.filter_pass(device, queue, &layer.view, &pong.view, kind, [0.0; 2], amount, radius);
+                let mut enc = device.create_command_encoder(&Default::default());
+                copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+                queue.submit([enc.finish()]);
+            }
+        }
+    }
+
     /// Motion blur: a flat box average of `2*radius+1` taps along `angle_rad`
     /// (a directional/linear blur). Single pass; destructive + undoable.
     pub fn apply_motion_blur(

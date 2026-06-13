@@ -161,6 +161,7 @@ impl PigmentApp {
         match prism_io::load_image(&path) {
             Ok(img) => {
                 self.doc = Document::new(img.size);
+                self.smart_filters.clear();
                 self.background_id = self.doc.layers.layers[0].id;
                 self.pending = Some(PendingUpload {
                     size: img.size,
@@ -195,6 +196,7 @@ impl PigmentApp {
         self.clear_all_layer_styles();
         let mut staged = Vec::new();
         let mut loaded_styles: Vec<(LayerId, RuntimeLayerStyles)> = Vec::new();
+        let mut loaded_smart: Vec<(LayerId, super::smart_filter::SmartFilterStack)> = Vec::new();
         // Layers get fresh ids on load; map saved id -> new id so layer comps
         // (keyed by saved id) can be remapped onto the loaded layers.
         let mut id_map: HashMap<u64, LayerId> = HashMap::new();
@@ -217,6 +219,14 @@ impl PigmentApp {
             if let Some(styles) = &lm.styles {
                 loaded_styles.push((id, meta_styles_to_runtime(styles)));
             }
+            // Restore the non-destructive smart-filter stack under the fresh id;
+            // re-applied to the (source) pixels after upload (see view::ui).
+            if !lm.smart_filters.is_empty() {
+                loaded_smart.push((
+                    id,
+                    super::smart_filter::SmartFilterStack::from_meta(&lm.smart_filters),
+                ));
+            }
         }
         self.background_id = doc
             .layers
@@ -236,6 +246,9 @@ impl PigmentApp {
         for (id, rt) in &loaded_styles {
             self.install_runtime_styles(*id, rt);
         }
+        // Restored smart-filter stacks (keyed by the fresh ids); re-applied to the
+        // uploaded source pixels once the upload runs (see `view::ui`).
+        self.smart_filters = loaded_smart.into_iter().collect();
         self.pending = Some(PendingUpload {
             size,
             layers: staged,
@@ -285,6 +298,7 @@ impl PigmentApp {
             .unwrap_or(LayerId(0));
         doc.active_layer = doc.layers.layers.last().map(|l| l.id);
         self.doc = doc;
+        self.smart_filters.clear();
         self.pending = Some(PendingUpload {
             size,
             layers: staged,
@@ -432,6 +446,7 @@ impl PigmentApp {
             bytes.extend_from_slice(&f16::from_f32(a).to_le_bytes());
         }
         self.doc = Document::new(size);
+        self.smart_filters.clear();
         self.background_id = self.doc.layers.layers[0].id;
         self.pending = Some(PendingUpload {
             size,
@@ -508,15 +523,27 @@ impl PigmentApp {
                         LayerKind::Adjustment(a) => Some(a.clone()),
                         _ => None,
                     },
+                    // Persist the non-destructive smart-filter stack so it (and
+                    // the layer's un-filtered source pixels, saved below) round-trip.
+                    smart_filters: self
+                        .smart_filters
+                        .get(&l.id)
+                        .map(|s| s.to_meta())
+                        .unwrap_or_default(),
                 })
                 .collect(),
             comps: self.comps.iter().map(super::comps::comp_to_meta).collect(),
         };
         let ids: Vec<LayerId> = self.doc.layers.layers.iter().map(|l| l.id).collect();
+        // For layers with smart filters, save the *source* (un-filtered) pixels so
+        // the stack re-applies cleanly on load; otherwise the live layer pixels.
         let pixels = with_gpu(frame, |gpu, device, queue| {
             ids.iter()
                 .filter_map(|id| {
-                    gpu.read_layer(device, queue, *id).map(|b| LayerPixels {
+                    let bytes = gpu
+                        .read_smart_source(device, queue, *id)
+                        .or_else(|| gpu.read_layer(device, queue, *id));
+                    bytes.map(|b| LayerPixels {
                         id: id.0,
                         rgba16f: b,
                     })
@@ -721,6 +748,7 @@ mod adjustment_persist_tests {
                 LayerKind::Adjustment(a) => Some(a.clone()),
                 _ => None,
             },
+            smart_filters: Vec::new(),
         };
 
         // --- the actual on-disk hop: JSON serialize + deserialize ---
