@@ -658,6 +658,15 @@ impl PigmentApp {
         self.force_composite = true;
     }
 
+    /// Oil Paint the active layer (Kuwahara quadrant filter): each pixel becomes
+    /// the mean colour of the lowest-luma-variance quadrant of its `radius`-px
+    /// window, giving painterly patches with crisp edges.
+    pub(crate) fn do_oil_paint(&mut self, frame: &mut eframe::Frame, radius: f32) {
+        let active = self.active_id();
+        with_gpu(frame, |gpu, d, q| gpu.apply_oil_paint(d, q, active, radius));
+        self.force_composite = true;
+    }
+
     /// Diffuse the active layer: a seeded-deterministic anisotropic neighbour
     /// scramble — each pixel is replaced by a neighbour up to `amount` px away,
     /// the offset chosen by a hash of (x, y, seed) so the result is stable.

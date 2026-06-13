@@ -10,7 +10,7 @@ struct FParams {
     // 20 mosaic, 21 crystallize, 22 color halftone, 23 mezzotint,
     // 24 high pass (orig - blur, re-centred at mid-gray),
     // 25 clouds (fBm value-noise generator), 26 difference clouds
-    // (|source - clouds|).
+    // (|source - clouds|), 27 oil paint (Kuwahara quadrant filter).
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -558,6 +558,51 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let base = src.rgb / a;
         let diff = abs(base - vec3<f32>(n));
         return vec4<f32>(diff, 1.0);
+    } else if p.kind == 27u {
+        // ---- Oil Paint (kind 27): Kuwahara quadrant filter. Split the
+        // (2r+1)² window around the pixel into four overlapping (r+1)×(r+1)
+        // quadrants that share the centre; compute each quadrant's mean colour
+        // and luma variance, then output the mean of the *lowest-variance*
+        // quadrant. Picking the flattest quadrant smooths interiors while
+        // snapping to the side of an edge, giving the characteristic painterly
+        // patches with crisp boundaries. Work in premultiplied space (matching
+        // the blur/mosaic convention) so partial alpha is weighted correctly.
+        let r = i32(clamp(p.radius, 1.0, 8.0));
+        var best_var = 1e30;
+        var best_mean = textureSample(input, samp, in.uv);
+        // The four quadrant offset ranges (relative to the centre pixel).
+        var qx0 = array<i32, 4>(-r, 0, -r, 0);
+        var qx1 = array<i32, 4>(0, r, 0, r);
+        var qy0 = array<i32, 4>(-r, -r, 0, 0);
+        var qy1 = array<i32, 4>(0, 0, r, r);
+        for (var q = 0; q < 4; q = q + 1) {
+            var sum = vec4<f32>(0.0);
+            var lsum = 0.0;
+            var l2sum = 0.0;
+            var n = 0.0;
+            for (var dy = qy0[q]; dy <= qy1[q]; dy = dy + 1) {
+                for (var dx = qx0[q]; dx <= qx1[q]; dx = dx + 1) {
+                    let s = textureSample(
+                        input, samp,
+                        in.uv + vec2<f32>(f32(dx), f32(dy)) * p.texel,
+                    );
+                    let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+                    let lm = dot(s.rgb, lw);
+                    sum = sum + s;
+                    lsum = lsum + lm;
+                    l2sum = l2sum + lm * lm;
+                    n = n + 1.0;
+                }
+            }
+            let mean = sum / n;
+            let lmean = lsum / n;
+            let variance = l2sum / n - lmean * lmean;
+            if variance < best_var {
+                best_var = variance;
+                best_mean = mean;
+            }
+        }
+        return best_mean;
     } else if p.kind == 16u {
         // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
         // swap. Replace each pixel with one of its neighbours within `amount`

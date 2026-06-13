@@ -7,6 +7,19 @@ this project is pre-1.0, so versions are `0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Stylize · Oil Paint** (Filter Gallery). A new entry in the **Stylize** filter
+  menu applies a Kuwahara quadrant filter to the active layer: each pixel is
+  replaced by the mean colour of the lowest-luma-variance quadrant of its
+  `(2·radius+1)²` window (a **brush radius** slider, 1–8 px). Picking the flattest
+  quadrant smooths interiors while snapping to one side of an edge, yielding the
+  classic painterly patches with crisp boundaries — a true edge-preserving paint
+  effect, not a blur. It runs as a single neighbourhood pass in
+  linear-premultiplied space (GPU shader kind 27 via `filter_pass_c`), is
+  destructive and undoable (region-COW) like the existing blur / distort /
+  stylize / noise / pixelate filters, and is mirrored by a CPU reference
+  (`filter_math::oil_paint`). Tested: CPU unit tests (flat field is identity; a
+  hard black/white step snaps every pixel to a pure side, never a ~0.5 blend) and
+  GPU pixel tests with the skip-on-no-adapter convention (same two properties).
 - **Layer comps** (Layer power). The Layers panel gains a **Layer Comps** section
   where you can **Capture** a named snapshot of every layer's appearance —
   visibility, opacity, and blend mode — and later **Restore** it with one click,

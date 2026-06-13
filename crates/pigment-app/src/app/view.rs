@@ -402,6 +402,16 @@ impl eframe::App for PigmentApp {
                             ui.close_menu();
                         }
                         ui.separator();
+                        // Oil Paint (Kuwahara quadrant filter → painterly patches).
+                        ui.add(
+                            egui::Slider::new(&mut self.oil_paint_radius, 1.0..=8.0)
+                                .text("brush radius"),
+                        );
+                        if ui.button("Oil Paint").clicked() {
+                            self.do_oil_paint(frame, self.oil_paint_radius);
+                            ui.close_menu();
+                        }
+                        ui.separator();
                         // Diffuse (seeded-deterministic neighbour scramble).
                         ui.add(
                             egui::Slider::new(&mut self.diffuse_amount, 0.0..=32.0)

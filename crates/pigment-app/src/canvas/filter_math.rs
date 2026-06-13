@@ -498,6 +498,60 @@ pub fn glowing_edges(
     out
 }
 
+/// Oil Paint (Kuwahara quadrant filter, kind 27): split the `(2r+1)²` window
+/// around each pixel into four overlapping `(r+1)×(r+1)` quadrants sharing the
+/// centre, then output the mean colour of the quadrant with the lowest luma
+/// variance. Choosing the flattest quadrant smooths interiors while snapping to
+/// one side of an edge, giving painterly patches with crisp boundaries. Operates
+/// in premultiplied space (matching the blur/mosaic convention) with edge-clamped
+/// sampling, so the CPU reference matches the WGSL pass.
+pub fn oil_paint(img: &[[f32; 4]], w: usize, h: usize, radius: usize) -> Vec<[f32; 4]> {
+    let r = radius.clamp(1, 8) as i32;
+    // The four quadrant offset ranges (relative to the centre pixel), each
+    // sharing the centre row/column so the window is fully covered.
+    let quads: [(i32, i32, i32, i32); 4] = [
+        (-r, 0, -r, 0),
+        (0, r, -r, 0),
+        (-r, 0, 0, r),
+        (0, r, 0, r),
+    ];
+    let mut out = vec![[0.0f32; 4]; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut best_var = f32::INFINITY;
+            let mut best_mean = img[y * w + x];
+            for &(dx0, dx1, dy0, dy1) in &quads {
+                let mut sum = [0.0f32; 4];
+                let mut lsum = 0.0f32;
+                let mut l2sum = 0.0f32;
+                let mut n = 0.0f32;
+                for dy in dy0..=dy1 {
+                    for dx in dx0..=dx1 {
+                        let sx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
+                        let sy = (y as i32 + dy).clamp(0, h as i32 - 1) as usize;
+                        let p = img[sy * w + sx];
+                        let lm = luma(p);
+                        for c in 0..4 {
+                            sum[c] += p[c];
+                        }
+                        lsum += lm;
+                        l2sum += lm * lm;
+                        n += 1.0;
+                    }
+                }
+                let lmean = lsum / n;
+                let variance = l2sum / n - lmean * lmean;
+                if variance < best_var {
+                    best_var = variance;
+                    best_mean = [sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n];
+                }
+            }
+            out[y * w + x] = best_mean;
+        }
+    }
+    out
+}
+
 /// Diffuse: a seeded-deterministic anisotropic neighbour scramble — each pixel
 /// is replaced by a neighbour up to `amount` px away, the offset chosen by a
 /// hash of `(x, y, seed)` (matching the WGSL `fract(sin(..))` hash). Stable for
@@ -1029,6 +1083,41 @@ mod tests {
         assert!(a != c, "a different seed changes the field");
         let id = diffuse(&img, n, n, 0.0, 1.0);
         assert_eq!(id, img, "amount 0 is identity");
+    }
+
+    #[test]
+    fn oil_paint_is_flat_field_identity() {
+        // A uniform field has zero variance in every quadrant, so the mean it
+        // outputs equals the (constant) source colour — oil paint is identity.
+        let n = 9;
+        let img = vec![[0.3, 0.6, 0.2, 1.0]; n * n];
+        let out = oil_paint(&img, n, n, 2);
+        for p in &out {
+            assert!(approx(p[0], 0.3, 1e-4) && approx(p[1], 0.6, 1e-4), "flat → unchanged: {p:?}");
+        }
+    }
+
+    #[test]
+    fn oil_paint_picks_a_flat_quadrant_and_sharpens_the_edge() {
+        // On a vertical black/white step, an edge pixel's quadrants straddling
+        // the boundary have high variance; the flat (all-black or all-white)
+        // quadrant wins, so the output snaps to a pure side colour — never the
+        // ~0.5 average a plain box blur would give. Output stays opaque.
+        let n = 9;
+        let img = vsplit(n);
+        let out = oil_paint(&img, n, n, 2);
+        let row = n / 2;
+        for x in 0..n {
+            let v = out[row * n + x][0];
+            assert!(
+                !(0.01..=0.99).contains(&v),
+                "every pixel snaps to a pure side, never a blend: {v} at x={x}",
+            );
+            assert!(approx(out[row * n + x][3], 1.0, 1e-4), "alpha preserved");
+        }
+        // The far-left stays black, the far-right stays white.
+        assert!(out[row * n][0] < 0.01, "left side stays black");
+        assert!(out[row * n + (n - 1)][0] > 0.99, "right side stays white");
     }
 
     // ---- Motion blur ------------------------------------------------------

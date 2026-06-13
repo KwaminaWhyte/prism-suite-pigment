@@ -309,6 +309,7 @@ pub struct PigmentApp {
     glow_width: f32,        // Sobel sampling step (px)
     diffuse_amount: f32,    // max neighbour displacement (px)
     diffuse_seed: f32,      // deterministic scramble seed
+    oil_paint_radius: f32,  // oil-paint (Kuwahara) quadrant half-size (px)
     // Noise family (Phase 8).
     noise_amount: f32,      // add-noise strength (0..1)
     noise_mono: bool,       // monochromatic (same noise on R/G/B)
@@ -562,6 +563,7 @@ impl PigmentApp {
             glow_width: 1.0,
             diffuse_amount: 4.0,
             diffuse_seed: 1.0,
+            oil_paint_radius: 3.0,
             noise_amount: 0.1,
             noise_mono: false,
             noise_gaussian: true,

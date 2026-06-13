@@ -2670,3 +2670,70 @@ fn clouds_are_deterministic_opaque_and_vary() {
         );
     }
 }
+
+// ---- Oil Paint (Kuwahara quadrant filter, Phase 8) -----------------------
+
+// A flat field has zero variance in every quadrant, so the chosen quadrant's
+// mean equals the (constant) source colour: Oil Paint leaves it unchanged.
+#[test]
+fn oil_paint_flat_field_is_identity() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping oil_paint_flat_field_is_identity");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 8u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    gpu.upload_layer(&queue, l0, &layer_from(n, |_x, _y| [0.3, 0.6, 0.2, 1.0]));
+    gpu.apply_oil_paint(&device, &queue, l0, 2.0);
+    let p = gpu.read_pixel(&device, &queue, l0, n / 2, n / 2).unwrap();
+    assert!(
+        (p[0] - 0.3).abs() < 0.02 && (p[1] - 0.6).abs() < 0.02 && (p[2] - 0.2).abs() < 0.02,
+        "flat field unchanged: {p:?}"
+    );
+}
+
+// On a hard vertical black/white step, Oil Paint snaps each pixel to a pure
+// side (the flattest quadrant wins) — never the ~0.5 average a box blur gives.
+#[test]
+fn oil_paint_snaps_to_a_side_of_an_edge() {
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping oil_paint_snaps_to_a_side_of_an_edge");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 16u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    gpu.upload_layer(
+        &queue,
+        l0,
+        &layer_from(n, |x, _y| {
+            if x < n / 2 {
+                [0.0, 0.0, 0.0, 1.0]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            }
+        }),
+    );
+    gpu.apply_oil_paint(&device, &queue, l0, 2.0);
+    let row = n / 2;
+    for x in 0..n {
+        let v = gpu.read_pixel(&device, &queue, l0, x, row).unwrap()[0];
+        assert!(
+            !(0.05..=0.95).contains(&v),
+            "snaps to a pure side, never a blend: {v} at x={x}"
+        );
+    }
+    assert!(
+        gpu.read_pixel(&device, &queue, l0, 0, row).unwrap()[0] < 0.05,
+        "left stays black"
+    );
+    assert!(
+        gpu.read_pixel(&device, &queue, l0, n - 1, row).unwrap()[0] > 0.95,
+        "right stays white"
+    );
+}

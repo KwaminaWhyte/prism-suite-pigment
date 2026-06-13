@@ -316,6 +316,38 @@ impl CanvasGpu {
         queue.submit([enc.finish()]);
     }
 
+    /// Oil Paint (Kuwahara quadrant filter, kind 27) on the active layer:
+    /// replace each pixel with the mean colour of the lowest-luma-variance
+    /// quadrant of its `(2·radius+1)²` window — painterly patches with crisp
+    /// edges. `radius` is the quadrant half-size in px (clamped 1..8 in-shader).
+    /// Single pass; destructive + undoable (region-COW).
+    pub fn apply_oil_paint(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: LayerId,
+        radius: f32,
+    ) {
+        self.begin_command_now(device, queue, id, "Oil Paint");
+        let (Some(layer), Some(pong)) = (self.layers.get(&id), self.pong.as_ref()) else {
+            return;
+        };
+        self.filter_pass_c(
+            device,
+            queue,
+            &layer.view,
+            &pong.view,
+            27,
+            [0.0; 2],
+            0.0,
+            radius,
+            [0.0; 2],
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+        copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+        queue.submit([enc.finish()]);
+    }
+
     /// Add seeded-deterministic noise to the active layer (kind 17). `amount` is
     /// the noise strength (0..1); `mono` applies the same noise to R/G/B;
     /// `gaussian` selects gaussian (true) vs uniform (false) noise; `seed` makes
