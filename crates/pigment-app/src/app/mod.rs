@@ -649,13 +649,14 @@ impl PigmentApp {
 }
 
 mod adjustments;
+pub(crate) mod camera_raw;
 mod comps;
 mod edit;
 mod gradient;
 mod io;
 mod pattern;
 mod retouch;
-mod smart_filter;
+pub(crate) mod smart_filter;
 mod state;
 mod view;
 

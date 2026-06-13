@@ -14,7 +14,9 @@ struct FParams {
     // 28 posterize (quantize each channel to N display-space levels),
     // 29 threshold (luma cutoff → pure black/white),
     // 30 tilt-shift (graduated focus blur: sharp band, blur falls off outside),
-    // 31 iris blur (radial focus blur: sharp inside an ellipse, blur outside).
+    // 31 iris blur (radial focus blur: sharp inside an ellipse, blur outside),
+    // 32 camera raw (white balance / exposure / contrast / tonal regions /
+    //    vibrance & saturation / positional vignette — the develop pipeline).
     kind: u32,
     _p0: u32,
     _p1: u32,
@@ -41,6 +43,14 @@ struct FParams {
                       // mosaic/crystallize: cell size (px); color halftone: cell
                       // (dot screen) size (px)
     center: vec2<f32>, // radial/distort center in uv (0..1)
+    // Camera Raw (kind 32) develop controls, packed as three vec4s:
+    //   cr0 = (temp, tint, exposure, contrast)
+    //   cr1 = (highlights, shadows, whites, blacks)
+    //   cr2 = (vibrance, saturation, vignette, _reserved)
+    // All zero for every other kind (a no-op), and all-zero here is identity.
+    cr0: vec4<f32>,
+    cr1: vec4<f32>,
+    cr2: vec4<f32>,
 };
 
 @group(0) @binding(0) var samp: sampler;
@@ -750,6 +760,97 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
         return sum / max(wsum, 1e-5);
+    } else if p.kind == 32u {
+        // ---- Camera Raw (kind 32): the RAW develop pipeline as one pass. Mirrors
+        // the CPU reference in `app::camera_raw::develop_pixel` exactly: white
+        // balance and exposure in linear light, then contrast / tonal regions /
+        // vibrance+saturation in display (sRGB) space, then back to linear. The
+        // vignette is positional (distance from canvas center) and applied last
+        // as a luma gain. Identity (all controls 0) is an exact no-op.
+        let src = textureSample(input, samp, in.uv);
+        let a = max(src.a, 1e-4);
+        var rgb = src.rgb / a; // straight linear
+
+        let temp = p.cr0.x;
+        let tint = p.cr0.y;
+        let exposure = p.cr0.z;
+        let contrast = p.cr0.w;
+        let highlights = p.cr1.x;
+        let shadows = p.cr1.y;
+        let whites = p.cr1.z;
+        let blacks = p.cr1.w;
+        let vibrance = p.cr2.x;
+        let saturation = p.cr2.y;
+        let vignette = p.cr2.z;
+
+        // White balance (linear).
+        if temp != 0.0 || tint != 0.0 {
+            let t = temp / 100.0;
+            let ti = tint / 100.0;
+            rgb = vec3<f32>(
+                rgb.x * (1.0 + 0.30 * t + 0.15 * ti),
+                rgb.y * (1.0 - 0.15 * ti),
+                rgb.z * (1.0 - 0.30 * t + 0.15 * ti),
+            );
+        }
+        // Exposure (linear).
+        if exposure != 0.0 {
+            rgb = rgb * exp2(exposure);
+        }
+
+        // To display space for the tonal + saturation controls.
+        var d = l2s(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)));
+
+        // Contrast: S-curve about mid-gray.
+        if contrast != 0.0 {
+            let c = contrast / 100.0;
+            var slope = 1.0 + c;
+            if c < 0.0 { slope = 1.0 + c * 0.5; }
+            d = clamp(vec3<f32>(0.5) + (d - vec3<f32>(0.5)) * slope, vec3<f32>(0.0), vec3<f32>(1.0));
+        }
+
+        // Tonal regions (display space) as a per-pixel luma gain.
+        if highlights != 0.0 || shadows != 0.0 || whites != 0.0 || blacks != 0.0 {
+            let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+            let y = clamp(dot(d, lw), 0.0, 1.0);
+            let w_high = smoothstep(0.0, 1.0, (y - 0.3) / 0.7);
+            let w_shad = smoothstep(0.0, 1.0, (0.7 - y) / 0.7);
+            let w_white = smoothstep(0.0, 1.0, (y - 0.6) / 0.4);
+            let w_black = smoothstep(0.0, 1.0, (0.4 - y) / 0.4);
+            let delta = 0.5 * (highlights / 100.0 * w_high
+                + shadows / 100.0 * w_shad
+                + whites / 100.0 * w_white
+                + blacks / 100.0 * w_black);
+            let ny = clamp(y + delta, 0.0, 1.0);
+            var gain = 1.0 + delta;
+            if y > 1e-4 { gain = ny / y; }
+            d = clamp(d * gain, vec3<f32>(0.0), vec3<f32>(1.0));
+        }
+
+        // Vibrance + saturation (display space).
+        if vibrance != 0.0 || saturation != 0.0 {
+            let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+            let y = dot(d, lw);
+            let sat = max(d.x, max(d.y, d.z)) - min(d.x, min(d.y, d.z));
+            let sat_amt = saturation / 100.0;
+            let vib_amt = vibrance / 100.0 * (1.0 - sat);
+            let scale = 1.0 + sat_amt + vib_amt;
+            d = clamp(vec3<f32>(y) + (d - vec3<f32>(y)) * scale, vec3<f32>(0.0), vec3<f32>(1.0));
+        }
+
+        // Back to linear.
+        var out = s2l(d);
+
+        // Positional vignette: center pinned, quadratic falloff to the corner.
+        if vignette != 0.0 {
+            let v = vignette / 100.0;
+            let off = in.uv - vec2<f32>(0.5, 0.5);          // -0.5..0.5
+            let dist = length(off) / length(vec2<f32>(0.5, 0.5)); // 0 center, 1 corner
+            let dc = clamp(dist, 0.0, 1.0);
+            out = out * max(1.0 + v * dc * dc, 0.0);
+        }
+
+        return vec4<f32>(out * src.a, src.a);
     } else if p.kind == 16u {
         // ---- Diffuse (kind 16): seeded-deterministic anisotropic neighbour
         // swap. Replace each pixel with one of its neighbours within `amount`

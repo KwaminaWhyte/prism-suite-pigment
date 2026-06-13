@@ -7,6 +7,31 @@ this project is pre-1.0, so versions are `0.x` milestones.
 ## [Unreleased]
 
 ### Added
+- **Camera Raw filter** (Smart Filters — non-destructive develop). A new
+  **re-editable smart-filter kind** ("Camera Raw") that applies the RAW develop
+  controls to any raster layer as a single non-destructive, re-orderable entry in
+  the layer's smart-filter stack: **white balance** (temp / tint), **exposure**,
+  **contrast**, the four **tonal regions** (highlights / shadows / whites /
+  blacks), **vibrance**, **saturation**, and a positional **vignette** — every
+  control defaults to 0, which is an exact no-op. Implemented as one GPU pass
+  (filter shader **kind 32**): white balance and exposure run in **linear light**,
+  then contrast, the tonal regions (luma-weighted so hue is preserved), and
+  vibrance/saturation run in **display (sRGB)** space so the pivots and tones land
+  where the user sees them, then back to linear; the vignette is applied last as a
+  center-pinned quadratic luma falloff to the corners. The eleven controls ride in
+  an **additive** `params_ext` overflow slot on the serialized smart-filter entry
+  (legacy four-param kinds and older documents serialize byte-for-byte
+  unchanged). The per-pixel tone/WB math has a pure CPU reference
+  (`app::camera_raw::develop_pixel`) that the shader mirrors bit-for-bit. Tested:
+  identity is a no-op (per-channel); exposure brightens/darkens (~2× per EV at the
+  midpoint); contrast pivots about mid-gray; highlights/shadows/whites/blacks each
+  bite their tonal range; temperature warms R / cools B (green untouched); tint
+  trades green↔magenta; saturation/vibrance behave (vibrance favours muted
+  colours); the vignette darkens corners more than the center with the center
+  pinned; and the controls round-trip through the smart-filter stack incl. the
+  missing-overflow (legacy) case — 13 CPU unit tests + 1 GPU pixel test
+  (skip-on-no-adapter). Additive `prism-io` field (`SmartFilterMeta.params_ext`);
+  all four suite apps still build.
 - **Filter · Blur · Iris Blur** (Blur Gallery — radial focus blur). The radial
   sibling of Tilt-Shift: a new destructive, undoable entry in the **Filter ▸
   Blur** submenu that keeps the image sharp inside an **elliptical** region at the

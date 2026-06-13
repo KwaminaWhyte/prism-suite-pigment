@@ -15,13 +15,36 @@
 //! canvas; the stacks themselves are held app-side, keyed by [`LayerId`], next
 //! to the layer comps (the layer model in `prism-core` stays GPU-/filter-clean).
 
+use super::camera_raw::CameraRaw;
 use super::{with_gpu, PigmentApp};
 use prism_core::{LayerId, LayerKind};
 use prism_io::document_file::SmartFilterMeta;
 
-/// One enabled smart filter's GPU pass parameters: `(shader_kind, radius, amount)`,
-/// as consumed by `CanvasGpu::reapply_smart_filters`.
-pub(crate) type SmartPass = (u32, f32, f32);
+/// One enabled smart filter's GPU pass parameters, as consumed by
+/// `CanvasGpu::reapply_smart_filters`: the shader `kind`, the scalar `radius` /
+/// `amount` the simple kinds use, and the `cr` overflow payload that the
+/// multi-parameter kinds (Camera Raw, shader kind 32) read instead. `cr` is all
+/// zeros for the scalar kinds — and all-zero Camera Raw params are an exact
+/// no-op, so an unset payload never disturbs a pass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SmartPass {
+    pub kind: u32,
+    pub radius: f32,
+    pub amount: f32,
+    pub cr: [f32; 12],
+}
+
+impl SmartPass {
+    /// A scalar (radius/amount) pass with an empty Camera Raw payload.
+    pub(crate) fn scalar(kind: u32, radius: f32, amount: f32) -> Self {
+        Self {
+            kind,
+            radius,
+            amount,
+            cr: [0.0; 12],
+        }
+    }
+}
 
 /// The kinds of filter that can live in a smart-filter stack. Each carries its
 /// own editable parameters. This is deliberately a small, representative set —
@@ -40,6 +63,11 @@ pub(crate) enum SmartFilterKind {
     /// Posterize: quantize each channel to N display-space levels (GPU filter
     /// shader kind 28). `levels` 2..=32 in the UI (engine accepts 2..=255).
     Posterize { levels: u32 },
+    /// Camera Raw: the RAW develop controls (white balance, exposure, contrast,
+    /// tonal regions, vibrance/saturation, vignette) bundled into one re-editable
+    /// non-destructive filter (GPU filter shader kind 32). See
+    /// [`crate::app::camera_raw`] for the per-pixel math + ranges.
+    CameraRaw { params: CameraRaw },
 }
 
 impl SmartFilterKind {
@@ -50,6 +78,7 @@ impl SmartFilterKind {
             SmartFilterKind::GaussianBlur { .. } => 0,
             SmartFilterKind::Sharpen { .. } => 1,
             SmartFilterKind::Posterize { .. } => 2,
+            SmartFilterKind::CameraRaw { .. } => 3,
         }
     }
 
@@ -59,17 +88,34 @@ impl SmartFilterKind {
             SmartFilterKind::GaussianBlur { radius } => [radius, 0.0, 0.0, 0.0],
             SmartFilterKind::Sharpen { amount } => [amount, 0.0, 0.0, 0.0],
             SmartFilterKind::Posterize { levels } => [levels as f32, 0.0, 0.0, 0.0],
+            // Camera Raw carries its eleven controls in the `params_ext` overflow
+            // slot (see `params_ext`); the four-slot field is unused.
+            SmartFilterKind::CameraRaw { .. } => [0.0; 4],
+        }
+    }
+
+    /// The serialized `[f32; 12]` overflow payload for kinds that carry more than
+    /// four parameters (only Camera Raw today). `None` for the simple kinds, so
+    /// they serialize byte-compatibly with documents written before the slot
+    /// existed.
+    fn params_ext(&self) -> Option<[f32; 12]> {
+        match self {
+            SmartFilterKind::CameraRaw { params } => Some(params.to_ext()),
+            _ => None,
         }
     }
 
     /// Reconstruct a kind from its serialized discriminant + params. Unknown ids
     /// fall back to a no-op-ish Gaussian blur of radius 0 so a forward-compatible
     /// document never fails to load (the filter just does nothing).
-    fn from_id(id: u32, p: [f32; 4]) -> Self {
+    fn from_id(id: u32, p: [f32; 4], ext: Option<[f32; 12]>) -> Self {
         match id {
             1 => SmartFilterKind::Sharpen { amount: p[0] },
             2 => SmartFilterKind::Posterize {
                 levels: (p[0].round() as u32).clamp(2, 255),
+            },
+            3 => SmartFilterKind::CameraRaw {
+                params: CameraRaw::from_ext(ext.unwrap_or([0.0; 12])),
             },
             _ => SmartFilterKind::GaussianBlur { radius: p[0] },
         }
@@ -81,18 +127,26 @@ impl SmartFilterKind {
             SmartFilterKind::GaussianBlur { .. } => "Gaussian Blur",
             SmartFilterKind::Sharpen { .. } => "Sharpen",
             SmartFilterKind::Posterize { .. } => "Posterize",
+            SmartFilterKind::CameraRaw { .. } => "Camera Raw",
         }
     }
 
-    /// The GPU filter shader kind + `(radius, amount)` to drive the existing
-    /// filter pass for this entry (see `CanvasGpu::reapply_smart_filters`).
+    /// The GPU filter shader kind + `(radius, amount)` (and, for Camera Raw, the
+    /// `cr` overflow payload) to drive the filter pass for this entry (see
+    /// `CanvasGpu::reapply_smart_filters`).
     pub(crate) fn gpu_pass(&self) -> SmartPass {
         match *self {
-            SmartFilterKind::GaussianBlur { radius } => (1, radius, 0.0),
-            SmartFilterKind::Sharpen { amount } => (2, 0.0, amount),
+            SmartFilterKind::GaussianBlur { radius } => SmartPass::scalar(1, radius, 0.0),
+            SmartFilterKind::Sharpen { amount } => SmartPass::scalar(2, 0.0, amount),
             SmartFilterKind::Posterize { levels } => {
-                (28, 0.0, (levels.clamp(2, 255)) as f32)
+                SmartPass::scalar(28, 0.0, (levels.clamp(2, 255)) as f32)
             }
+            SmartFilterKind::CameraRaw { params } => SmartPass {
+                kind: 32,
+                radius: 0.0,
+                amount: 0.0,
+                cr: params.shader_params(),
+            },
         }
     }
 }
@@ -181,6 +235,7 @@ impl SmartFilterStack {
                 kind: f.kind.id(),
                 params: f.kind.params(),
                 enabled: f.enabled,
+                params_ext: f.kind.params_ext(),
             })
             .collect()
     }
@@ -193,7 +248,7 @@ impl SmartFilterStack {
             filters: meta
                 .iter()
                 .map(|m| SmartFilter {
-                    kind: SmartFilterKind::from_id(m.kind, m.params),
+                    kind: SmartFilterKind::from_id(m.kind, m.params, m.params_ext),
                     enabled: m.enabled,
                 })
                 .collect(),
@@ -370,7 +425,7 @@ mod tests {
         // Only the posterize pass remains; the entry itself is still present.
         let passes = s.enabled_passes();
         assert_eq!(passes.len(), 1);
-        assert_eq!(passes[0].0, 28);
+        assert_eq!(passes[0].kind, 28);
         assert_eq!(s.filters.len(), 2);
         // Toggling back restores it.
         s.toggle(0);
@@ -395,7 +450,7 @@ mod tests {
         s.move_down(2);
         assert_eq!(s.filters.len(), 3);
         // The enabled-pass GPU kinds reflect the new order (posterize=28 first).
-        let kinds: Vec<u32> = s.enabled_passes().iter().map(|p| p.0).collect();
+        let kinds: Vec<u32> = s.enabled_passes().iter().map(|p| p.kind).collect();
         assert_eq!(kinds, vec![28, 1, 2]);
     }
 
@@ -430,5 +485,62 @@ mod tests {
         let s = SmartFilterStack::from_meta(&empty);
         assert!(s.is_empty());
         assert!(s.to_meta().is_empty());
+    }
+
+    // A Camera Raw entry round-trips all eleven controls through the stack's
+    // serialized meta (the `params_ext` overflow slot), preserving its enabled
+    // flag and order alongside the simple kinds.
+    #[test]
+    fn camera_raw_meta_round_trips() {
+        let cr = CameraRaw {
+            temp: 30.0,
+            tint: -10.0,
+            exposure: 0.75,
+            contrast: 20.0,
+            highlights: -50.0,
+            shadows: 40.0,
+            whites: 5.0,
+            blacks: -15.0,
+            vibrance: 35.0,
+            saturation: -25.0,
+            vignette: -60.0,
+        };
+        let mut s = SmartFilterStack::default();
+        s.add(blur(2.0));
+        s.add(SmartFilterKind::CameraRaw { params: cr });
+        s.toggle(1); // disable the Camera Raw entry
+        let meta = s.to_meta();
+        // Camera Raw populates the overflow slot; the blur leaves it None.
+        assert!(meta[0].params_ext.is_none());
+        assert!(meta[1].params_ext.is_some());
+        let back = SmartFilterStack::from_meta(&meta);
+        assert_eq!(back, s);
+        match back.filters[1].kind {
+            SmartFilterKind::CameraRaw { params } => assert_eq!(params, cr),
+            _ => panic!("expected Camera Raw"),
+        }
+        assert!(!back.filters[1].enabled);
+        // Its GPU pass uses shader kind 32 and carries the controls in `cr`.
+        let pass = SmartFilterKind::CameraRaw { params: cr }.gpu_pass();
+        assert_eq!(pass.kind, 32);
+        assert_eq!(pass.cr, cr.to_ext());
+    }
+
+    // A Camera Raw meta written without the overflow slot (legacy / corrupt)
+    // loads as an identity Camera Raw rather than failing — the forward-compat
+    // contract.
+    #[test]
+    fn camera_raw_missing_ext_is_identity() {
+        let meta = vec![SmartFilterMeta {
+            kind: 3,
+            params: [0.0; 4],
+            enabled: true,
+            params_ext: None,
+        }];
+        let s = SmartFilterStack::from_meta(&meta);
+        match s.filters[0].kind {
+            SmartFilterKind::CameraRaw { params } => assert!(params.is_identity()),
+            _ => panic!("expected Camera Raw"),
+        }
     }
 }

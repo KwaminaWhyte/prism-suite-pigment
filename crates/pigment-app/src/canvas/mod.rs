@@ -142,6 +142,10 @@ struct FilterParams {
     amount: f32,
     radius: f32,
     center: [f32; 2],
+    // Camera Raw (kind 32) overflow payload: the eleven develop controls packed
+    // as three vec4s (slot 11 reserved). All zero for every other kind — and an
+    // all-zero payload is an exact no-op — so it is harmless padding elsewhere.
+    cr: [[f32; 4]; 3],
 }
 
 #[repr(C)]

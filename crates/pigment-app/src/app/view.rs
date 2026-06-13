@@ -1552,6 +1552,12 @@ impl eframe::App for PigmentApp {
                                                 );
                                                 ui.close_menu();
                                             }
+                                            if ui.button("Camera Raw").clicked() {
+                                                sf_action = SmartFilterUi::Add(SfK::CameraRaw {
+                                                    params: Default::default(),
+                                                });
+                                                ui.close_menu();
+                                            }
                                         });
                                         let stack = self.smart_stack(active);
                                         if stack.is_empty() {
@@ -1629,6 +1635,43 @@ impl eframe::App for PigmentApp {
                                                             SfK::Posterize {
                                                                 levels: l.round() as u32,
                                                             },
+                                                        );
+                                                    }
+                                                }
+                                                SfK::CameraRaw { params } => {
+                                                    // Edit a working copy; commit on
+                                                    // any slider change so the develop
+                                                    // pass re-runs from the source.
+                                                    let mut cr = params;
+                                                    let mut changed = false;
+                                                    let mut sl = |ui: &mut egui::Ui,
+                                                                  v: &mut f32,
+                                                                  lo: f32,
+                                                                  hi: f32,
+                                                                  name: &str| {
+                                                        let r = ui.add(
+                                                            egui::Slider::new(v, lo..=hi)
+                                                                .text(name),
+                                                        );
+                                                        if r.changed() || r.drag_stopped() {
+                                                            changed = true;
+                                                        }
+                                                    };
+                                                    sl(ui, &mut cr.temp, -100.0, 100.0, "temp");
+                                                    sl(ui, &mut cr.tint, -100.0, 100.0, "tint");
+                                                    sl(ui, &mut cr.exposure, -5.0, 5.0, "exposure");
+                                                    sl(ui, &mut cr.contrast, -100.0, 100.0, "contrast");
+                                                    sl(ui, &mut cr.highlights, -100.0, 100.0, "highlights");
+                                                    sl(ui, &mut cr.shadows, -100.0, 100.0, "shadows");
+                                                    sl(ui, &mut cr.whites, -100.0, 100.0, "whites");
+                                                    sl(ui, &mut cr.blacks, -100.0, 100.0, "blacks");
+                                                    sl(ui, &mut cr.vibrance, -100.0, 100.0, "vibrance");
+                                                    sl(ui, &mut cr.saturation, -100.0, 100.0, "saturation");
+                                                    sl(ui, &mut cr.vignette, -100.0, 100.0, "vignette");
+                                                    if changed {
+                                                        sf_action = SmartFilterUi::Edit(
+                                                            i,
+                                                            SfK::CameraRaw { params: cr },
                                                         );
                                                     }
                                                 }

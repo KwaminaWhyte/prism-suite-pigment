@@ -56,6 +56,38 @@ impl CanvasGpu {
         radius: f32,
         center: [f32; 2],
     ) {
+        self.filter_pass_cr(
+            device,
+            queue,
+            input,
+            orig,
+            output,
+            kind,
+            dir,
+            amount,
+            radius,
+            center,
+            [[0.0; 4]; 3],
+        )
+    }
+
+    /// Like `filter_pass_2` but also writes the Camera Raw `cr` overflow payload
+    /// (shader kind 32). Every other path passes an all-zero `cr` (a no-op).
+    #[allow(clippy::too_many_arguments)]
+    fn filter_pass_cr(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &wgpu::TextureView,
+        orig: &wgpu::TextureView,
+        output: &wgpu::TextureView,
+        kind: u32,
+        dir: [f32; 2],
+        amount: f32,
+        radius: f32,
+        center: [f32; 2],
+        cr: [[f32; 4]; 3],
+    ) {
         let (w, h) = (
             self.canvas_size.width as f32,
             self.canvas_size.height as f32,
@@ -71,6 +103,7 @@ impl CanvasGpu {
                 amount,
                 radius,
                 center,
+                cr,
             }),
         );
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -226,7 +259,7 @@ impl CanvasGpu {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         id: LayerId,
-        passes: &[(u32, f32, f32)],
+        passes: &[crate::app::smart_filter::SmartPass],
     ) {
         self.ensure_smart_source(device, queue, id);
         let (Some(src), Some(layer), Some(pong)) = (
@@ -245,11 +278,26 @@ impl CanvasGpu {
             1.0 / self.canvas_size.width as f32,
             1.0 / self.canvas_size.height as f32,
         );
-        for &(kind, radius, amount) in passes {
+        for pass in passes {
+            let (kind, radius, amount) = (pass.kind, pass.radius, pass.amount);
             if kind == 1 || kind == 5 {
                 // Separable blur: layer -> pong (H), pong -> layer (V).
                 self.filter_pass(device, queue, &layer.view, &pong.view, kind, [txw, 0.0], 0.0, radius);
                 self.filter_pass(device, queue, &pong.view, &layer.view, kind, [0.0, txh], 0.0, radius);
+            } else if kind == 32 {
+                // Camera Raw: single pass carrying the develop controls in `cr`.
+                let cr = [
+                    [pass.cr[0], pass.cr[1], pass.cr[2], pass.cr[3]],
+                    [pass.cr[4], pass.cr[5], pass.cr[6], pass.cr[7]],
+                    [pass.cr[8], pass.cr[9], pass.cr[10], pass.cr[11]],
+                ];
+                self.filter_pass_cr(
+                    device, queue, &layer.view, &layer.view, &pong.view, kind, [0.0; 2], amount,
+                    radius, [0.0; 2], cr,
+                );
+                let mut enc = device.create_command_encoder(&Default::default());
+                copy_tex(&mut enc, &pong.tex, &layer.tex, self.canvas_size);
+                queue.submit([enc.finish()]);
             } else {
                 // Single pass: layer -> pong, then copy pong back into layer.
                 self.filter_pass(device, queue, &layer.view, &pong.view, kind, [0.0; 2], amount, radius);

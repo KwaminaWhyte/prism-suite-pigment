@@ -2879,7 +2879,7 @@ fn smart_gaussian_blur_softens_then_disabling_restores_original() {
 
     // Apply a smart Gaussian blur (shader kind 1) over the source. This snapshots
     // the un-filtered source and writes the blurred result into the layer.
-    gpu.reapply_smart_filters(&device, &queue, l0, &[(1, 6.0, 0.0)]);
+    gpu.reapply_smart_filters(&device, &queue, l0, &[crate::app::smart_filter::SmartPass::scalar(1, 6.0, 0.0)]);
     assert!(gpu.has_smart_source(l0), "blur snapshotted the source");
     let blur_l = gpu.read_pixel(&device, &queue, l0, n / 2 - 1, row).unwrap()[0];
     let blur_r = gpu.read_pixel(&device, &queue, l0, n / 2, row).unwrap()[0];
@@ -2936,8 +2936,8 @@ fn smart_filter_edit_reapplies_from_pristine_source() {
     );
     let row = n / 2;
     // Strong blur, then edit the same entry down to radius 0 (a no-op pass).
-    gpu.reapply_smart_filters(&device, &queue, l0, &[(1, 8.0, 0.0)]);
-    gpu.reapply_smart_filters(&device, &queue, l0, &[(1, 0.0, 0.0)]);
+    gpu.reapply_smart_filters(&device, &queue, l0, &[crate::app::smart_filter::SmartPass::scalar(1, 8.0, 0.0)]);
+    gpu.reapply_smart_filters(&device, &queue, l0, &[crate::app::smart_filter::SmartPass::scalar(1, 0.0, 0.0)]);
     // Because the source was never overwritten, the hard edge is back exactly.
     for x in 0..n {
         let v = gpu.read_pixel(&device, &queue, l0, x, row).unwrap()[0];
@@ -2947,6 +2947,76 @@ fn smart_filter_edit_reapplies_from_pristine_source() {
             "edit re-applies from pristine source at x={x}: {v}"
         );
     }
+}
+
+// Camera Raw smart filter (kind 32): an identity develop is a no-op, positive
+// exposure brightens a flat gray, and a negative vignette darkens the corners
+// more than the center (the positional part). One GPU pixel test; skips with no
+// adapter. The per-pixel tone/WB math has its own pure CPU unit tests.
+#[test]
+fn camera_raw_develops_and_vignettes() {
+    use crate::app::camera_raw::CameraRaw;
+    use crate::app::smart_filter::SmartFilterKind as SfK;
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter; skipping camera_raw_develops_and_vignettes");
+        return;
+    };
+    let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    let n = 32u32;
+    gpu.ensure_canvas(&device, Size::new(n, n));
+    let l0 = LayerId(0);
+    gpu.ensure_layer(&device, l0);
+    // A flat mid-gray field (linear ~0.25, opaque).
+    let base = 0.25f32;
+    gpu.upload_layer(&queue, l0, &layer_from(n, |_x, _y| [base, base, base, 1.0]));
+    let center = (n / 2, n / 2);
+    let corner = (0u32, 0u32);
+
+    let pass = |k: SfK| k.gpu_pass();
+
+    // Identity Camera Raw: no change anywhere.
+    gpu.reapply_smart_filters(
+        &device,
+        &queue,
+        l0,
+        &[pass(SfK::CameraRaw {
+            params: CameraRaw::default(),
+        })],
+    );
+    let id_c = gpu.read_pixel(&device, &queue, l0, center.0, center.1).unwrap()[0];
+    assert!((id_c - base).abs() < 0.01, "identity camera raw is a no-op: {id_c}");
+
+    // Positive exposure brightens the center (re-applied from the pristine source).
+    gpu.reapply_smart_filters(
+        &device,
+        &queue,
+        l0,
+        &[pass(SfK::CameraRaw {
+            params: CameraRaw {
+                exposure: 1.0,
+                ..Default::default()
+            },
+        })],
+    );
+    let bright_c = gpu.read_pixel(&device, &queue, l0, center.0, center.1).unwrap()[0];
+    assert!(bright_c > base + 0.05, "exposure+1 brightens center: {bright_c}");
+
+    // Negative vignette: corners darker than the center; center ~unchanged.
+    gpu.reapply_smart_filters(
+        &device,
+        &queue,
+        l0,
+        &[pass(SfK::CameraRaw {
+            params: CameraRaw {
+                vignette: -80.0,
+                ..Default::default()
+            },
+        })],
+    );
+    let vc = gpu.read_pixel(&device, &queue, l0, center.0, center.1).unwrap()[0];
+    let vk = gpu.read_pixel(&device, &queue, l0, corner.0, corner.1).unwrap()[0];
+    assert!((vc - base).abs() < 0.02, "vignette leaves center ~unchanged: {vc}");
+    assert!(vk < vc - 0.03, "vignette darkens the corner vs center: {vk} < {vc}");
 }
 
 // Tilt-Shift (Blur Gallery, kind 30): a vertical hard edge runs the full canvas
